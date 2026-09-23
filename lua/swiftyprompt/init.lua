@@ -28,6 +28,8 @@ local function show_response(state, text)
 
     if not state.response_buffer then
         state.response_buffer = vim.api.nvim_create_buf(false, true)
+        -- Keep Markdown highlighting, but hide document-lint warnings on AI replies.
+        vim.diagnostic.enable(false, { bufnr = state.response_buffer })
     end
 
     vim.api.nvim_buf_set_lines(state.response_buffer, 0, -1, false, lines)
@@ -168,10 +170,16 @@ local function open_thread(source_window, anchor_line, anchor_col, text)
     open_question_input(state, 1, "Ask Codex — Enter to send")
 end
 
-function M.open_at_cursor()
+function M.require_selection()
+    vim.notify("SwiftPrompt: select code first, then press " .. config.values.keymap, vim.log.levels.INFO)
+end
+
+function M.open_current_file()
     local source_window = vim.api.nvim_get_current_win()
     local cursor = vim.api.nvim_win_get_cursor(source_window)
-    open_thread(source_window, cursor[1] - 1, cursor[2], "")
+    local buffer = vim.api.nvim_get_current_buf()
+    local lines = vim.api.nvim_buf_get_lines(buffer, 0, -1, false)
+    open_thread(source_window, cursor[1] - 1, cursor[2], table.concat(lines, "\n"))
 end
 
 function M.open_at_visual_selection()
@@ -198,11 +206,44 @@ function M.open_at_visual_selection()
     open_thread(source_window, middle_line, middle_col, selected_text(start, cursor))
 end
 
+local function symbol_at_cursor(symbols, cursor_line)
+    for _, symbol in ipairs(symbols) do
+        local range = symbol.range or (symbol.location and symbol.location.range)
+
+        if range and cursor_line >= range.start.line and cursor_line <= range["end"].line then
+            local child = symbol.children and symbol_at_cursor(symbol.children, cursor_line)
+            return child or symbol
+        end
+    end
+end
+
+function M.open_current_symbol()
+    local source_window = vim.api.nvim_get_current_win()
+    local buffer = vim.api.nvim_get_current_buf()
+    local cursor = vim.api.nvim_win_get_cursor(source_window)
+    local request = {
+        textDocument = vim.lsp.util.make_text_document_params(),
+    }
+    local responses = vim.lsp.buf_request_sync(buffer, "textDocument/documentSymbol", request, 1000)
+
+    for _, response in pairs(responses or {}) do
+        local symbol = response.result and symbol_at_cursor(response.result, cursor[1] - 1)
+        if symbol then
+            local range = symbol.range or symbol.location.range
+            local lines = vim.api.nvim_buf_get_lines(buffer, range.start.line, range["end"].line + 1, false)
+            open_thread(source_window, cursor[1] - 1, cursor[2], table.concat(lines, "\n"))
+            return
+        end
+    end
+
+    vim.notify("SwiftPrompt: no LSP symbol found at the cursor", vim.log.levels.WARN)
+end
+
 function M.setup(options)
     config.setup(options)
 
     if config.values.keymap then
-        vim.keymap.set("n", config.values.keymap, M.open_at_cursor, { desc = "Ask SwiftPrompt" })
+        vim.keymap.set("n", config.values.keymap, M.require_selection, { desc = "SwiftPrompt needs a selection" })
         vim.keymap.set(
             "x",
             config.values.keymap,
@@ -210,6 +251,9 @@ function M.setup(options)
             { desc = "Ask SwiftPrompt about selection" }
         )
     end
+
+    vim.keymap.set("n", config.values.file_keymap, M.open_current_file, { desc = "Ask SwiftPrompt about file" })
+    vim.keymap.set("n", config.values.symbol_keymap, M.open_current_symbol, { desc = "Ask SwiftPrompt about symbol" })
 end
 
 return M
