@@ -1,6 +1,6 @@
 local M = {}
 
-function M.ask(options, question, selected_text, done)
+function M.ask(options, question, selected_text, input_context, done)
     if options.auth == "api_key" and not vim.env[options.api_key_env] then
         done(nil, "Set " .. options.api_key_env .. " before starting Neovim.")
         return
@@ -12,13 +12,19 @@ function M.ask(options, question, selected_text, done)
     local prompt = table.concat({
         "Answer this question about the selected code. Do not edit files.",
         "",
-        "Question: " .. question,
-        "",
         "Selected code:",
         "```",
         selected_text,
         "```",
     }, "\n")
+
+    -- Include completed turns so a follow-up can refer to earlier answers.
+    for _, turn in ipairs(input_context) do
+        prompt = prompt .. "\n\nPrevious question: " .. turn.question
+        prompt = prompt .. "\nPrevious answer: " .. turn.answer
+    end
+
+    prompt = prompt .. "\n\nQuestion: " .. question
 
     vim.system({
         options.command,
