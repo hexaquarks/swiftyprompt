@@ -8,6 +8,7 @@ local default_options = {
     connectors = {
         codex = {
             command = "codex",
+            model = "gpt-6-luna",
             sandbox = "read-only",
             auth = "codex_login",
             api_key_env = "OPENAI_API_KEY",
