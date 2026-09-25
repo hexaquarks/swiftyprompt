@@ -29,6 +29,8 @@ function M.ask(connector_options, question, selected_code, conversation_history,
     vim.system({
         connector_options.command,
         "exec",
+        -- SwiftPrompt can be invoked from any Neovim working directory.
+        "--skip-git-repo-check",
         "--sandbox",
         connector_options.sandbox,
         "--ephemeral",
