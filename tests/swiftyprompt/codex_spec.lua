@@ -2,6 +2,7 @@ local codex = require("swiftyprompt.connectors.codex")
 
 local options = {
     command = "codex",
+    model = "test-model",
     sandbox = "read-only",
     auth = "codex_login",
     api_key_env = "OPENAI_API_KEY",
@@ -74,11 +75,13 @@ describe("Codex connector", function()
 
         assert.same("codex", command[1])
         assert.same("exec", command[2])
-        assert.same("--skip-git-repo-check", command[3])
-        assert.same("--output-last-message", command[7])
-        assert.matches("local value = 1", command[9])
-        assert.matches("Previous question: What is value%?", command[9])
-        assert.matches("Question: What does this do%?", command[9])
+        assert.same("--model", command[3])
+        assert.same("test-model", command[4])
+        assert.same("--skip-git-repo-check", command[5])
+        assert.same("--output-last-message", command[9])
+        assert.matches("local value = 1", command[11])
+        assert.matches("Previous question: What is value%?", command[11])
+        assert.matches("Question: What does this do%?", command[11])
         assert.same("The answer\nhas two lines.", answer)
         assert.is_nil(error_message)
         assert.same("/tmp/swiftyprompt-test-answer", deleted_file)
@@ -142,6 +145,7 @@ describe("Codex connector", function()
 
         codex.ask({
             command = "codex",
+            model = "test-model",
             sandbox = "read-only",
             auth = "api_key",
             api_key_env = "SWIFTPROMPT_TEST_API_KEY",
