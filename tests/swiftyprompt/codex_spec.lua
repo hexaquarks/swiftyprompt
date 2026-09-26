@@ -3,6 +3,7 @@ local codex = require("swiftyprompt.connectors.codex")
 local options = {
     command = "codex",
     model = "test-model",
+    reasoning_effort = "none",
     sandbox = "read-only",
     auth = "codex_login",
     api_key_env = "OPENAI_API_KEY",
@@ -96,6 +97,7 @@ describe("Codex connector", function()
         respond(3, { thread = { id = "thread-1" } })
         assert.same("turn/start", sent_request(4).method)
         assert.same("thread-1", sent_request(4).params.threadId)
+        assert.same("none", sent_request(4).params.effort)
         assert.matches("local value = 1", sent_request(4).params.input[1].text)
         assert.matches("Previous question: What is value%?", sent_request(4).params.input[1].text)
         assert.matches("Question: What does this do%?", sent_request(4).params.input[1].text)

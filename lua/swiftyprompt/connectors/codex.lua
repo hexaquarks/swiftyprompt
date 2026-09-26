@@ -200,6 +200,7 @@ local function ask_question(question)
         send_request("turn/start", {
             threadId = thread.id,
             input = { { type = "text", text = question.prompt } },
+            effort = question.options.reasoning_effort,
         }, function(turn_result, turn_error)
             if turn_error then
                 question.on_complete(nil, turn_error)
