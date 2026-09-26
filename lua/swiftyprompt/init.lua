@@ -7,6 +7,7 @@ local connectors = {
 
 local RESPONSE_WINDOW_WIDTH = 60
 local MAX_RESPONSE_WINDOW_HEIGHT = 12
+local QUESTION_WINDOW_HEIGHT = 3
 
 local function close_window_if_valid(window_id)
     if window_id and vim.api.nvim_win_is_valid(window_id) then
@@ -147,7 +148,7 @@ local function open_question_prompt(conversation, row_offset, title)
         bufpos = { conversation.anchor_line, conversation.anchor_column },
         anchor = "NW",
         width = RESPONSE_WINDOW_WIDTH,
-        height = 1,
+        height = QUESTION_WINDOW_HEIGHT,
         row = row_offset,
         col = 0,
         style = "minimal",
@@ -173,7 +174,7 @@ function M.open_follow_up_prompt(conversation)
         return
     end
 
-    -- Keep the one-line editor directly below the visible response card.
+    -- Keep the editor directly below the visible response card.
     open_question_prompt(conversation, conversation.response_window_height + 3, "Follow-up — Enter to send")
 end
 
