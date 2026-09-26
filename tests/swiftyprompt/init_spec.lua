@@ -10,11 +10,13 @@ describe("SwiftPrompt interaction UI", function()
     local opened_window_configs
     local question_prompt_callbacks
     local codex_requests
+    local codex_response
 
     before_each(function()
         opened_window_configs = {}
         question_prompt_callbacks = {}
         codex_requests = {}
+        codex_response = "first line\nsecond line\nthird line"
         original_ask = codex.ask
         original_open_win = vim.api.nvim_open_win
         original_prompt_setcallback = vim.fn.prompt_setcallback
@@ -37,7 +39,7 @@ describe("SwiftPrompt interaction UI", function()
                 selected_code = selected_code,
                 conversation_history = vim.deepcopy(conversation_history),
             })
-            on_complete("first line\nsecond line\nthird line", nil)
+            on_complete(codex_response, nil)
         end
     end)
 
@@ -80,6 +82,22 @@ describe("SwiftPrompt interaction UI", function()
         submit_callback(question)
     end
 
+    it("splits empty, single-line, and multi-line responses", function()
+        assert.same({ "" }, swiftyprompt.split_response_lines(""))
+        assert.same({ "one line" }, swiftyprompt.split_response_lines("one line"))
+        assert.same({ "one", "two", "three" }, swiftyprompt.split_response_lines("one\ntwo\nthree"))
+    end)
+
+    it("normalizes Unix, Windows, and classic Mac newlines", function()
+        assert.same({ "one", "two", "three" }, swiftyprompt.split_response_lines("one\ntwo\nthree"))
+        assert.same({ "one", "two", "three" }, swiftyprompt.split_response_lines("one\r\ntwo\r\nthree"))
+        assert.same({ "one", "two", "three" }, swiftyprompt.split_response_lines("one\rtwo\rthree"))
+    end)
+
+    it("preserves blank lines and trailing newlines in responses", function()
+        assert.same({ "one", "", "two", "", "" }, swiftyprompt.split_response_lines("one\n\ntwo\n\n"))
+    end)
+
     it("anchors the question dialog at the middle of a multi-line selection", function()
         local source_window = open_selection(
             { "abcDEF", "ghiJKL", "mnopqr" },
@@ -117,6 +135,18 @@ describe("SwiftPrompt interaction UI", function()
         assert.same("Follow-up — Enter to send", opened_window_configs[3].title:match("Follow%-up — Enter to send"))
         assert.same(6, opened_window_configs[3].row) -- three response lines + its border gap
         assert.same(1, opened_window_configs[3].height)
+    end)
+
+    it("grows the response window for wrapped lines", function()
+        codex_response = string.rep("x", 61)
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+
+        local response_window = vim.api.nvim_get_current_win()
+        local response_config = vim.api.nvim_win_get_config(response_window)
+        assert.same(60, response_config.width)
+        assert.same(2, response_config.height)
+        assert.is_true(vim.wo[response_window].wrap)
     end)
 
     it("closes prompt and response dialogs with Escape in Normal mode", function()

@@ -19,8 +19,19 @@ local function close_conversation_windows(conversation)
     close_window_if_valid(conversation.response_window)
 end
 
-local function split_response_lines(response_text)
-    return vim.split(response_text, "\n")
+function M.split_response_lines(response_text)
+    local normalized_response = response_text:gsub("\r\n?", "\n")
+    return vim.split(normalized_response, "\n", { plain = true, trimempty = false })
+end
+
+local function response_display_height(response_lines)
+    local display_rows = 0
+    for _, line in ipairs(response_lines) do
+        local line_width = vim.fn.strdisplaywidth(line)
+        display_rows = display_rows + math.max(math.ceil(line_width / RESPONSE_WINDOW_WIDTH), 1)
+    end
+
+    return math.min(math.max(display_rows, 1), MAX_RESPONSE_WINDOW_HEIGHT)
 end
 
 local function set_close_keymaps(buffer_id, conversation)
@@ -53,8 +64,8 @@ local function response_window_config(conversation)
 end
 
 local function render_response(conversation, response_text)
-    local response_lines = split_response_lines(response_text)
-    conversation.response_window_height = math.min(math.max(#response_lines, 1), MAX_RESPONSE_WINDOW_HEIGHT)
+    local response_lines = M.split_response_lines(response_text)
+    conversation.response_window_height = response_display_height(response_lines)
 
     if not conversation.response_buffer then
         conversation.response_buffer = vim.api.nvim_create_buf(false, true)
@@ -72,6 +83,7 @@ local function render_response(conversation, response_text)
     end
 
     conversation.response_window = vim.api.nvim_open_win(conversation.response_buffer, true, window_config)
+    vim.wo[conversation.response_window].wrap = true
 
     vim.keymap.set("n", "f", function()
         M.open_follow_up_prompt(conversation)
