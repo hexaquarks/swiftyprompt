@@ -117,6 +117,9 @@ local function open_question_prompt(conversation, row_offset, title)
 
     local question_buffer = vim.api.nvim_create_buf(false, true)
     vim.bo[question_buffer].buftype = "prompt"
+    -- Prompt text must never survive after its floating window closes. Otherwise
+    -- Neovim keeps a modified unnamed buffer and asks to save it on exit.
+    vim.bo[question_buffer].bufhidden = "wipe"
     vim.fn.prompt_setprompt(question_buffer, "Ask: ")
 
     conversation.question_window = vim.api.nvim_open_win(question_buffer, true, {
