@@ -73,8 +73,13 @@ local function render_response(conversation, response_text)
         vim.diagnostic.enable(false, { bufnr = conversation.response_buffer })
     end
 
+    vim.bo[conversation.response_buffer].readonly = false
+    vim.bo[conversation.response_buffer].modifiable = true
     vim.api.nvim_buf_set_lines(conversation.response_buffer, 0, -1, false, response_lines)
     vim.bo[conversation.response_buffer].filetype = "markdown"
+    vim.bo[conversation.response_buffer].modified = false
+    vim.bo[conversation.response_buffer].modifiable = false
+    vim.bo[conversation.response_buffer].readonly = true
 
     local window_config = response_window_config(conversation)
     if conversation.response_window and vim.api.nvim_win_is_valid(conversation.response_window) then
@@ -84,6 +89,8 @@ local function render_response(conversation, response_text)
 
     conversation.response_window = vim.api.nvim_open_win(conversation.response_buffer, true, window_config)
     vim.wo[conversation.response_window].wrap = true
+    vim.wo[conversation.response_window].conceallevel = 2
+    vim.wo[conversation.response_window].concealcursor = "nvic"
 
     vim.keymap.set("n", "f", function()
         M.open_follow_up_prompt(conversation)
