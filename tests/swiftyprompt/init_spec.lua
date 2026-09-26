@@ -111,7 +111,7 @@ describe("SwiftPrompt interaction UI", function()
             bufpos = { 1, 3 },
             anchor = "NW",
             width = 60,
-            height = 1,
+            height = 3,
             row = 1,
             col = 0,
             style = "minimal",
@@ -134,7 +134,7 @@ describe("SwiftPrompt interaction UI", function()
 
         assert.same("Follow-up — Enter to send", opened_window_configs[3].title:match("Follow%-up — Enter to send"))
         assert.same(6, opened_window_configs[3].row) -- three response lines + its border gap
-        assert.same(1, opened_window_configs[3].height)
+        assert.same(3, opened_window_configs[3].height)
     end)
 
     it("grows the response window for wrapped lines", function()
