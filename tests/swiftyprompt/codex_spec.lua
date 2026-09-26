@@ -9,62 +9,75 @@ local options = {
 }
 
 describe("Codex connector", function()
-    local original_system
-    local original_schedule
-    local original_tempname
-    local original_filereadable
-    local original_readfile
-    local original_delete
+    local original_jobstart
+    local original_chansend
+    local original_jobstop
+    local original_timer_start
+    local original_timer_stop
     local original_api_key
+    local callbacks
+    local sent_messages
+    local stopped_jobs
+    local stopped_timers
+
+    local function sent_request(index)
+        return vim.json.decode(sent_messages[index])
+    end
+
+    local function respond(request_index, result)
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            id = sent_request(request_index).id,
+            result = result,
+        }), "" })
+    end
 
     before_each(function()
-        original_system = vim.system
-        original_schedule = vim.schedule
-        original_tempname = vim.fn.tempname
-        original_filereadable = vim.fn.filereadable
-        original_readfile = vim.fn.readfile
-        original_delete = vim.fn.delete
+        codex.shutdown()
+        original_jobstart = vim.fn.jobstart
+        original_chansend = vim.fn.chansend
+        original_jobstop = vim.fn.jobstop
+        original_timer_start = vim.fn.timer_start
+        original_timer_stop = vim.fn.timer_stop
         original_api_key = vim.env.SWIFTPROMPT_TEST_API_KEY
         vim.env.SWIFTPROMPT_TEST_API_KEY = nil
+        callbacks = {}
+        sent_messages = {}
+        stopped_jobs = {}
+        stopped_timers = {}
 
-        -- Run scheduled callbacks immediately so each test stays synchronous.
-        vim.schedule = function(callback)
-            callback()
+        vim.fn.jobstart = function(_, job_callbacks)
+            callbacks = job_callbacks
+            return 42
         end
-        vim.fn.tempname = function()
-            return "/tmp/swiftyprompt-test-answer"
+        vim.fn.chansend = function(_, message)
+            table.insert(sent_messages, message)
+        end
+        vim.fn.jobstop = function(job_id)
+            table.insert(stopped_jobs, job_id)
+        end
+        vim.fn.timer_start = function(_, callback)
+            callbacks.idle_timer = callback
+            return 7
+        end
+        vim.fn.timer_stop = function(timer_id)
+            table.insert(stopped_timers, timer_id)
         end
     end)
 
     after_each(function()
-        vim.system = original_system
-        vim.schedule = original_schedule
-        vim.fn.tempname = original_tempname
-        vim.fn.filereadable = original_filereadable
-        vim.fn.readfile = original_readfile
-        vim.fn.delete = original_delete
+        codex.shutdown()
+        vim.fn.jobstart = original_jobstart
+        vim.fn.chansend = original_chansend
+        vim.fn.jobstop = original_jobstop
+        vim.fn.timer_start = original_timer_start
+        vim.fn.timer_stop = original_timer_stop
         vim.env.SWIFTPROMPT_TEST_API_KEY = original_api_key
     end)
 
-    it("sends selection, prior turns, and the new question to Codex", function()
-        local command
-        local deleted_file
+    it("lazily starts one app server and returns the completed turn", function()
         local answer
         local error_message
-
-        vim.fn.filereadable = function()
-            return 1
-        end
-        vim.fn.readfile = function()
-            return { "The answer", "has two lines." }
-        end
-        vim.fn.delete = function(path)
-            deleted_file = path
-        end
-        vim.system = function(args, _, callback)
-            command = args
-            callback({ code = 0, stderr = "" })
-        end
 
         codex.ask(options, "What does this do?", "local value = 1", {
             { question = "What is value?", response = "It is a number." },
@@ -73,75 +86,85 @@ describe("Codex connector", function()
             error_message = failure
         end)
 
-        assert.same("codex", command[1])
-        assert.same("exec", command[2])
-        assert.same("--model", command[3])
-        assert.same("test-model", command[4])
-        assert.same("--skip-git-repo-check", command[5])
-        assert.same("--output-last-message", command[9])
-        assert.matches("local value = 1", command[11])
-        assert.matches("Previous question: What is value%?", command[11])
-        assert.matches("Question: What does this do%?", command[11])
-        assert.same("The answer\nhas two lines.", answer)
+        assert.same("initialize", sent_request(1).method)
+        respond(1, {})
+        assert.same("initialized", sent_request(2).method)
+        assert.same("thread/start", sent_request(3).method)
+        assert.same("test-model", sent_request(3).params.model)
+        assert.same("read-only", sent_request(3).params.sandbox)
+
+        respond(3, { thread = { id = "thread-1" } })
+        assert.same("turn/start", sent_request(4).method)
+        assert.same("thread-1", sent_request(4).params.threadId)
+        assert.matches("local value = 1", sent_request(4).params.input[1].text)
+        assert.matches("Previous question: What is value%?", sent_request(4).params.input[1].text)
+        assert.matches("Question: What does this do%?", sent_request(4).params.input[1].text)
+
+        respond(4, { turn = { id = "turn-1" } })
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            method = "turn/completed",
+            params = {
+                turn = {
+                    id = "turn-1",
+                    status = "completed",
+                    items = { { type = "agentMessage", text = "The answer" } },
+                },
+            },
+        }), "" })
+
+        assert.same("The answer", answer)
         assert.is_nil(error_message)
-        assert.same("/tmp/swiftyprompt-test-answer", deleted_file)
+        assert.is_not_nil(callbacks.idle_timer)
     end)
 
-    it("returns Codex errors and removes the temporary answer file", function()
+    it("reuses the server before its idle timer fires, then stops it", function()
+        codex.ask(options, "First?", "code", {}, function() end)
+        respond(1, {})
+        respond(3, { thread = { id = "thread-1" } })
+        respond(4, { turn = { id = "turn-1" } })
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            method = "turn/completed",
+            params = { turn = { id = "turn-1", status = "completed", items = {} } },
+        }), "" })
+
+        codex.ask(options, "Second?", "code", {}, function() end)
+        assert.same("thread/start", sent_request(5).method)
+        assert.same({ 7 }, stopped_timers)
+
+        respond(5, { thread = { id = "thread-2" } })
+        respond(6, { turn = { id = "turn-2" } })
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            method = "turn/completed",
+            params = { turn = { id = "turn-2", status = "completed", items = {} } },
+        }), "" })
+        callbacks.idle_timer()
+        assert.same({ 42 }, stopped_jobs)
+    end)
+
+    it("returns app-server errors", function()
         local answer
         local error_message
-        local deleted_file
-
-        vim.fn.delete = function(path)
-            deleted_file = path
-        end
-        vim.system = function(_, _, callback)
-            callback({ code = 1, stderr = "Codex is unavailable" })
-        end
-
         codex.ask(options, "Why?", "code", {}, function(result, failure)
             answer = result
             error_message = failure
         end)
+
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            id = sent_request(1).id,
+            error = { message = "Codex is unavailable" },
+        }), "" })
 
         assert.is_nil(answer)
         assert.same("Codex is unavailable", error_message)
-        assert.same("/tmp/swiftyprompt-test-answer", deleted_file)
-    end)
-
-    it("explains when Codex does not write an answer", function()
-        local answer
-        local error_message
-        local deleted_file
-
-        vim.fn.filereadable = function()
-            return 0
-        end
-        vim.fn.delete = function(path)
-            deleted_file = path
-        end
-        vim.system = function(_, _, callback)
-            callback({ code = 0, stderr = "" })
-        end
-
-        codex.ask(options, "Why?", "code", {}, function(result, failure)
-            answer = result
-            error_message = failure
-        end)
-
-        assert.is_nil(answer)
-        assert.same("Codex finished without an answer.", error_message)
-        assert.same("/tmp/swiftyprompt-test-answer", deleted_file)
     end)
 
     it("does not start Codex when an API key is required but missing", function()
-        local system_was_called = false
         local answer
         local error_message
-
-        vim.system = function()
-            system_was_called = true
-        end
 
         codex.ask({
             command = "codex",
@@ -154,7 +177,7 @@ describe("Codex connector", function()
             error_message = failure
         end)
 
-        assert.is_false(system_was_called)
+        assert.is_nil(callbacks.on_stdout)
         assert.is_nil(answer)
         assert.same("Set SWIFTPROMPT_TEST_API_KEY before starting Neovim.", error_message)
     end)
