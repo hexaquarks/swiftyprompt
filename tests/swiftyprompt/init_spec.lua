@@ -168,8 +168,26 @@ describe("SwiftPrompt interaction UI", function()
         assert.is_false(vim.bo[response_buffer].modifiable)
         assert.is_true(vim.bo[response_buffer].readonly)
         assert.is_false(vim.bo[response_buffer].modified)
-        assert.same(2, vim.wo[response_window].conceallevel)
+        assert.same(3, vim.wo[response_window].conceallevel)
         assert.same("nvic", vim.wo[response_window].concealcursor)
+    end)
+
+    it("conceals Markdown delimiters and navigates by wrapped rows", function()
+        codex_response = "`Model` has **bold** and *italic* text."
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+
+        local response_window = vim.api.nvim_get_current_win()
+        local response_buffer = vim.api.nvim_win_get_buf(response_window)
+        assert.same("SwiftPromptMarkdownCodeDelimiter", vim.fn.synIDattr(vim.fn.synID(1, 1, 1), "name"))
+        assert.same("SwiftPromptMarkdownBoldDelimiter", vim.fn.synIDattr(vim.fn.synID(1, 13, 1), "name"))
+        assert.same("SwiftPromptMarkdownItalicDelimiter", vim.fn.synIDattr(vim.fn.synID(1, 26, 1), "name"))
+
+        for key, wrapped_key in pairs({ j = "gj", k = "gk", ["0"] = "g0", ["^"] = "g^", ["$"] = "g$" }) do
+            assert.same(wrapped_key, vim.fn.maparg(key, "n", false, true).rhs)
+        end
+
+        assert.same(response_buffer, vim.api.nvim_win_get_buf(response_window))
     end)
 
     it("closes prompt and response dialogs with Escape in Normal mode", function()
