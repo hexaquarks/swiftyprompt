@@ -1,7 +1,7 @@
 # SwiftPrompt
 
-Ask Codex about a Visual selection, the current file, or the current LSP symbol
-without leaving Neovim.
+SwiftPrompt is a small inline UI for asking Codex about a Visual selection, the
+current file, or the current LSP symbol without leaving Neovim.
 
 ## Install
 
@@ -70,7 +70,7 @@ To test an unpushed checkout, point your plugin specification at its directory:
 
 ```lua
 {
-  dir = "/Users/mihailanghelici/dev/projects/swiftyprompt",
+  dir = "/path/to/swiftyprompt",
   name = "swiftyprompt",
   config = function()
     require("swiftyprompt").setup()
