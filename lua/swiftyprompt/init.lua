@@ -126,6 +126,9 @@ local function configure_response_display(buffer_id, window_id)
 end
 
 local function response_window_config(conversation)
+    local connector_options = config.values.connectors[config.values.connector] or {}
+    local model_name = connector_options.model or config.values.connector
+
     return {
         relative = "win",
         win = conversation.source_window,
@@ -137,7 +140,9 @@ local function response_window_config(conversation)
         col = 0,
         style = "minimal",
         border = "rounded",
-        title = " Codex — f: follow up · y: copy · q/Esc: close ",
+        title = " Codex — f: follow up · q/Esc: close ",
+        footer = " " .. model_name .. " ",
+        footer_pos = "right",
     }
 end
 
@@ -173,11 +178,6 @@ local function render_response(conversation, response_text)
         M.open_follow_up_prompt(conversation)
     end, { buffer = conversation.response_buffer, desc = "Ask a follow-up" })
 
-    vim.keymap.set("n", "y", function()
-        vim.fn.setreg('"', conversation.latest_response)
-        vim.notify("Copied SwiftPrompt answer")
-    end, { buffer = conversation.response_buffer, desc = "Copy answer" })
-
     set_close_keymaps(conversation.response_buffer, conversation)
 end
 
@@ -203,7 +203,6 @@ local function submit_question(conversation, question)
             question = question,
             response = response,
         })
-        conversation.latest_response = response
         render_response(conversation, response)
     end)
 end
@@ -293,7 +292,6 @@ local function start_conversation(source_window, anchor_line, anchor_column, sel
         anchor_column = anchor_column,
         selected_code = selected_code,
         history = {},
-        latest_response = "",
     }
 
     open_question_prompt(conversation, 1, "Ask Codex — Enter to send")
