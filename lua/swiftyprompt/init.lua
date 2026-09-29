@@ -48,6 +48,60 @@ local function set_close_keymaps(buffer_id, conversation)
     end
 end
 
+local function configure_response_display(buffer_id, window_id)
+    vim.wo[window_id].wrap = true
+    vim.wo[window_id].conceallevel = 3
+    vim.wo[window_id].concealcursor = "nvic"
+
+    -- Neovim's Markdown syntax does not conceal inline-code delimiters, and
+    -- users can disable its other delimiter concealment. Responses are read-only,
+    -- so consistently render their Markdown without formatting characters.
+    vim.api.nvim_buf_call(buffer_id, function()
+        vim.cmd("syntax clear markdownItalic markdownBold markdownBoldItalic markdownStrike markdownCode")
+        for _, syntax_group in ipairs({
+            "SwiftPromptMarkdownItalic",
+            "SwiftPromptMarkdownBold",
+            "SwiftPromptMarkdownBoldItalic",
+            "SwiftPromptMarkdownUnderscoreItalic",
+            "SwiftPromptMarkdownUnderscoreBold",
+            "SwiftPromptMarkdownStrike",
+            "SwiftPromptMarkdownCode",
+        }) do
+            vim.cmd("silent! syntax clear " .. syntax_group)
+        end
+
+        vim.cmd([[syntax region SwiftPromptMarkdownItalic matchgroup=SwiftPromptMarkdownItalicDelimiter start="\*\S\@=" end="\S\@<=\*\|^$" skip="\\\*" concealends]])
+        vim.cmd([[syntax region SwiftPromptMarkdownBold matchgroup=SwiftPromptMarkdownBoldDelimiter start="\*\*\S\@=" end="\S\@<=\*\*\|^$" skip="\\\*" contains=SwiftPromptMarkdownItalic concealends]])
+        vim.cmd([[syntax region SwiftPromptMarkdownBoldItalic matchgroup=SwiftPromptMarkdownBoldItalicDelimiter start="\*\*\*\S\@=" end="\S\@<=\*\*\*\|^$" skip="\\\*" concealends]])
+        vim.cmd([[syntax region SwiftPromptMarkdownUnderscoreItalic matchgroup=SwiftPromptMarkdownUnderscoreItalicDelimiter start="\w\@<!_\S\@=" end="\S\@<=_\w\@!\|^$" skip="\\_" concealends]])
+        vim.cmd([[syntax region SwiftPromptMarkdownUnderscoreBold matchgroup=SwiftPromptMarkdownUnderscoreBoldDelimiter start="\w\@<!__\S\@=" end="\S\@<=__\w\@!\|^$" skip="\\_" contains=SwiftPromptMarkdownUnderscoreItalic concealends]])
+        vim.cmd([[syntax region SwiftPromptMarkdownStrike matchgroup=SwiftPromptMarkdownStrikeDelimiter start="\~\~\S\@=" end="\S\@<=\~\~\|^$" skip="\\\~" concealends]])
+        vim.cmd([[syntax region SwiftPromptMarkdownCode matchgroup=SwiftPromptMarkdownCodeDelimiter start="`" end="`" keepend concealends]])
+        vim.cmd([[syntax region SwiftPromptMarkdownCode matchgroup=SwiftPromptMarkdownCodeDelimiter start="`` \=" end=" \=``" keepend concealends]])
+
+        vim.cmd("highlight default link SwiftPromptMarkdownItalic markdownItalic")
+        vim.cmd("highlight default link SwiftPromptMarkdownBold markdownBold")
+        vim.cmd("highlight default link SwiftPromptMarkdownBoldItalic markdownBoldItalic")
+        vim.cmd("highlight default link SwiftPromptMarkdownUnderscoreItalic markdownItalic")
+        vim.cmd("highlight default link SwiftPromptMarkdownUnderscoreBold markdownBold")
+        vim.cmd("highlight default link SwiftPromptMarkdownStrike markdownStrike")
+        vim.cmd("highlight default link SwiftPromptMarkdownCode markdownCode")
+    end)
+
+    for _, motion in ipairs({
+        { key = "j", wrapped_key = "gj" },
+        { key = "k", wrapped_key = "gk" },
+        { key = "0", wrapped_key = "g0" },
+        { key = "^", wrapped_key = "g^" },
+        { key = "$", wrapped_key = "g$" },
+    }) do
+        vim.keymap.set("n", motion.key, motion.wrapped_key, {
+            buffer = buffer_id,
+            remap = false,
+        })
+    end
+end
+
 local function response_window_config(conversation)
     return {
         relative = "win",
@@ -85,13 +139,12 @@ local function render_response(conversation, response_text)
     local window_config = response_window_config(conversation)
     if conversation.response_window and vim.api.nvim_win_is_valid(conversation.response_window) then
         vim.api.nvim_win_set_config(conversation.response_window, window_config)
+        configure_response_display(conversation.response_buffer, conversation.response_window)
         return
     end
 
     conversation.response_window = vim.api.nvim_open_win(conversation.response_buffer, true, window_config)
-    vim.wo[conversation.response_window].wrap = true
-    vim.wo[conversation.response_window].conceallevel = 2
-    vim.wo[conversation.response_window].concealcursor = "nvic"
+    configure_response_display(conversation.response_buffer, conversation.response_window)
 
     vim.keymap.set("n", "f", function()
         M.open_follow_up_prompt(conversation)
