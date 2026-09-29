@@ -8,6 +8,8 @@ local connectors = {
 local RESPONSE_WINDOW_WIDTH = 60
 local MAX_RESPONSE_WINDOW_HEIGHT = 12
 local QUESTION_WINDOW_HEIGHT = 3
+local RESPONSE_MARKDOWN_NAMESPACE = vim.api.nvim_create_namespace("swiftyprompt-response-markdown")
+local MARKDOWN_DELIMITERS = { "***", "___", "**", "__", "~~", "`", "*", "_" }
 
 local function close_window_if_valid(window_id)
     if window_id and vim.api.nvim_win_is_valid(window_id) then
@@ -48,45 +50,66 @@ local function set_close_keymaps(buffer_id, conversation)
     end
 end
 
+local function conceal_markdown_delimiters(buffer_id)
+    vim.api.nvim_buf_clear_namespace(buffer_id, RESPONSE_MARKDOWN_NAMESPACE, 0, -1)
+
+    for line_index, line_text in ipairs(vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)) do
+        local claimed_columns = {}
+
+        for _, delimiter in ipairs(MARKDOWN_DELIMITERS) do
+            local delimiter_length = #delimiter
+            local search_start = 1
+
+            local function delimiter_is_available(delimiter_column)
+                local start_column = delimiter_column - 1
+                for column = start_column, start_column + delimiter_length - 1 do
+                    if claimed_columns[column] then
+                        return false
+                    end
+                end
+
+                return true
+            end
+
+            while true do
+                local opening_column = line_text:find(delimiter, search_start, true)
+                if not opening_column then
+                    break
+                end
+
+                local closing_column = line_text:find(delimiter, opening_column + delimiter_length, true)
+                local opening_content = line_text:sub(opening_column + delimiter_length, opening_column + delimiter_length)
+                local closing_content = closing_column and line_text:sub(closing_column - 1, closing_column - 1)
+                local has_content = closing_content and opening_content:match("%S") and closing_content:match("%S")
+                local delimiters_are_available = closing_column
+                    and delimiter_is_available(opening_column)
+                    and delimiter_is_available(closing_column)
+
+                if has_content and delimiters_are_available then
+                    for _, delimiter_column in ipairs({ opening_column, closing_column }) do
+                        local start_column = delimiter_column - 1
+                        vim.api.nvim_buf_set_extmark(buffer_id, RESPONSE_MARKDOWN_NAMESPACE, line_index - 1, start_column, {
+                            end_col = start_column + delimiter_length,
+                            conceal = "",
+                        })
+
+                        for column = start_column, start_column + delimiter_length - 1 do
+                            claimed_columns[column] = true
+                        end
+                    end
+                end
+
+                search_start = (closing_column or opening_column) + delimiter_length
+            end
+        end
+    end
+end
+
 local function configure_response_display(buffer_id, window_id)
     vim.wo[window_id].wrap = true
     vim.wo[window_id].conceallevel = 3
     vim.wo[window_id].concealcursor = "nvic"
-
-    -- Neovim's Markdown syntax does not conceal inline-code delimiters, and
-    -- users can disable its other delimiter concealment. Responses are read-only,
-    -- so consistently render their Markdown without formatting characters.
-    vim.api.nvim_buf_call(buffer_id, function()
-        vim.cmd("syntax clear markdownItalic markdownBold markdownBoldItalic markdownStrike markdownCode")
-        for _, syntax_group in ipairs({
-            "SwiftPromptMarkdownItalic",
-            "SwiftPromptMarkdownBold",
-            "SwiftPromptMarkdownBoldItalic",
-            "SwiftPromptMarkdownUnderscoreItalic",
-            "SwiftPromptMarkdownUnderscoreBold",
-            "SwiftPromptMarkdownStrike",
-            "SwiftPromptMarkdownCode",
-        }) do
-            vim.cmd("silent! syntax clear " .. syntax_group)
-        end
-
-        vim.cmd([[syntax region SwiftPromptMarkdownItalic matchgroup=SwiftPromptMarkdownItalicDelimiter start="\*\S\@=" end="\S\@<=\*\|^$" skip="\\\*" concealends]])
-        vim.cmd([[syntax region SwiftPromptMarkdownBold matchgroup=SwiftPromptMarkdownBoldDelimiter start="\*\*\S\@=" end="\S\@<=\*\*\|^$" skip="\\\*" contains=SwiftPromptMarkdownItalic concealends]])
-        vim.cmd([[syntax region SwiftPromptMarkdownBoldItalic matchgroup=SwiftPromptMarkdownBoldItalicDelimiter start="\*\*\*\S\@=" end="\S\@<=\*\*\*\|^$" skip="\\\*" concealends]])
-        vim.cmd([[syntax region SwiftPromptMarkdownUnderscoreItalic matchgroup=SwiftPromptMarkdownUnderscoreItalicDelimiter start="\w\@<!_\S\@=" end="\S\@<=_\w\@!\|^$" skip="\\_" concealends]])
-        vim.cmd([[syntax region SwiftPromptMarkdownUnderscoreBold matchgroup=SwiftPromptMarkdownUnderscoreBoldDelimiter start="\w\@<!__\S\@=" end="\S\@<=__\w\@!\|^$" skip="\\_" contains=SwiftPromptMarkdownUnderscoreItalic concealends]])
-        vim.cmd([[syntax region SwiftPromptMarkdownStrike matchgroup=SwiftPromptMarkdownStrikeDelimiter start="\~\~\S\@=" end="\S\@<=\~\~\|^$" skip="\\\~" concealends]])
-        vim.cmd([[syntax region SwiftPromptMarkdownCode matchgroup=SwiftPromptMarkdownCodeDelimiter start="`" end="`" keepend concealends]])
-        vim.cmd([[syntax region SwiftPromptMarkdownCode matchgroup=SwiftPromptMarkdownCodeDelimiter start="`` \=" end=" \=``" keepend concealends]])
-
-        vim.cmd("highlight default link SwiftPromptMarkdownItalic markdownItalic")
-        vim.cmd("highlight default link SwiftPromptMarkdownBold markdownBold")
-        vim.cmd("highlight default link SwiftPromptMarkdownBoldItalic markdownBoldItalic")
-        vim.cmd("highlight default link SwiftPromptMarkdownUnderscoreItalic markdownItalic")
-        vim.cmd("highlight default link SwiftPromptMarkdownUnderscoreBold markdownBold")
-        vim.cmd("highlight default link SwiftPromptMarkdownStrike markdownStrike")
-        vim.cmd("highlight default link SwiftPromptMarkdownCode markdownCode")
-    end)
+    conceal_markdown_delimiters(buffer_id)
 
     for _, motion in ipairs({
         { key = "j", wrapped_key = "gj" },

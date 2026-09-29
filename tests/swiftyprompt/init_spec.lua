@@ -179,15 +179,15 @@ describe("SwiftPrompt interaction UI", function()
 
         local response_window = vim.api.nvim_get_current_win()
         local response_buffer = vim.api.nvim_win_get_buf(response_window)
-        assert.same("SwiftPromptMarkdownCodeDelimiter", vim.fn.synIDattr(vim.fn.synID(1, 1, 1), "name"))
-        assert.same("SwiftPromptMarkdownBoldDelimiter", vim.fn.synIDattr(vim.fn.synID(1, 13, 1), "name"))
-        assert.same("SwiftPromptMarkdownItalicDelimiter", vim.fn.synIDattr(vim.fn.synID(1, 26, 1), "name"))
+        local namespace = vim.api.nvim_create_namespace("swiftyprompt-response-markdown")
+        local delimiter_marks = vim.api.nvim_buf_get_extmarks(response_buffer, namespace, 0, -1, { details = true })
 
-        vim.cmd("redraw!")
-        for _, column in ipairs({ 1, 7, 13, 14, 19, 20, 26, 33 }) do
-            local concealed = vim.fn.synconcealed(1, column)
-            assert.same(1, concealed[1])
+        local delimiter_columns = {}
+        for _, delimiter_mark in ipairs(delimiter_marks) do
+            assert.same("", delimiter_mark[4].conceal)
+            table.insert(delimiter_columns, delimiter_mark[3])
         end
+        assert.same({ 0, 6, 12, 18, 25, 32 }, delimiter_columns)
 
         for key, wrapped_key in pairs({ j = "gj", k = "gk", ["0"] = "g0", ["^"] = "g^", ["$"] = "g$" }) do
             assert.same(wrapped_key, vim.fn.maparg(key, "n", false, true).rhs)
