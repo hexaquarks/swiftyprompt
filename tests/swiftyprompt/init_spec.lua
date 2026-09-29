@@ -137,6 +137,15 @@ describe("SwiftPrompt interaction UI", function()
         assert.same(3, opened_window_configs[3].height)
     end)
 
+    it("wraps question text within the three-line prompt input", function()
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+
+        local prompt_window = vim.api.nvim_get_current_win()
+        local prompt_config = vim.api.nvim_win_get_config(prompt_window)
+        assert.same(3, prompt_config.height)
+        assert.is_true(vim.wo[prompt_window].wrap)
+    end)
+
     it("grows the response window for wrapped lines", function()
         codex_response = string.rep("x", 61)
         open_selection({ "one" }, { 1, 1 }, { 1, 0 })

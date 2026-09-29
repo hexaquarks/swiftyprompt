@@ -155,6 +155,7 @@ local function open_question_prompt(conversation, row_offset, title)
         border = "rounded",
         title = " " .. title .. " ",
     })
+    vim.wo[conversation.question_window].wrap = true
 
     vim.fn.prompt_setcallback(question_buffer, function(question)
         close_window_if_valid(conversation.question_window)
