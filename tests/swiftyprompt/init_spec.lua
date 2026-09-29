@@ -183,6 +183,12 @@ describe("SwiftPrompt interaction UI", function()
         assert.same("SwiftPromptMarkdownBoldDelimiter", vim.fn.synIDattr(vim.fn.synID(1, 13, 1), "name"))
         assert.same("SwiftPromptMarkdownItalicDelimiter", vim.fn.synIDattr(vim.fn.synID(1, 26, 1), "name"))
 
+        vim.cmd("redraw!")
+        for _, column in ipairs({ 1, 7, 13, 14, 19, 20, 26, 33 }) do
+            local concealed = vim.fn.synconcealed(1, column)
+            assert.same(1, concealed[1])
+        end
+
         for key, wrapped_key in pairs({ j = "gj", k = "gk", ["0"] = "g0", ["^"] = "g^", ["$"] = "g$" }) do
             assert.same(wrapped_key, vim.fn.maparg(key, "n", false, true).rhs)
         end
