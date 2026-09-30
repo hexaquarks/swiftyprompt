@@ -1,4 +1,13 @@
-# SwiftPrompt
+<p align="center">
+  <img
+    width="250"
+    alt="Swiftyprompt"
+    src="https://github.com/user-attachments/assets/f3d45527-1e5f-4c9e-84c6-550f081d99d9"
+  />
+</p>
+<h1 align="center">
+  Swiftyprompt
+</h1>
 
 SwiftPrompt is a small inline UI for asking Codex about a Visual selection, the
 current file, or the current LSP symbol without leaving Neovim.
