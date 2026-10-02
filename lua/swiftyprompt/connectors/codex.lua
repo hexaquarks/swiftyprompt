@@ -46,12 +46,16 @@ end
 
 local function fail_pending(message)
     for _, question in ipairs(state.queued_questions) do
-        question.on_complete(nil, message)
+        if not question.cancelled then
+            question.callbacks.on_complete(nil, message)
+        end
     end
     state.queued_questions = {}
 
     for _, turn in pairs(state.turns) do
-        turn.on_complete(nil, message)
+        if not turn.cancelled then
+            turn.callbacks.on_complete(nil, message)
+        end
     end
     state.turns = {}
 end
@@ -112,6 +116,10 @@ local function build_prompt(question, selected_code, is_new_thread)
 end
 
 local function finish_turn(turn, completed_turn)
+    if turn.cancelled then
+        return
+    end
+
     local response
     for _, item in ipairs(completed_turn.items or {}) do
         if item.type == "agentMessage" then
@@ -121,11 +129,11 @@ local function finish_turn(turn, completed_turn)
 
     if completed_turn.status ~= "completed" then
         local error = completed_turn.error and completed_turn.error.message
-        turn.on_complete(nil, error or "Codex did not complete the request.", turn.thread_id)
+        turn.callbacks.on_complete(nil, error or "Codex did not complete the request.", turn.thread_id)
     elseif response and response ~= "" then
-        turn.on_complete(response, nil, turn.thread_id)
+        turn.callbacks.on_complete(response, nil, turn.thread_id)
     else
-        turn.on_complete(nil, "Codex finished without an answer.", turn.thread_id)
+        turn.callbacks.on_complete(nil, "Codex finished without an answer.", turn.thread_id)
     end
 end
 
@@ -141,6 +149,16 @@ local function handle_message(message)
             else
                 callback(message.result, nil)
             end
+        end
+        return
+    end
+
+    if message.method == "item/agentMessage/delta" then
+        local delta = message.params or {}
+        local turn = state.turns[delta.turnId]
+        if turn and not turn.cancelled then
+            turn.response = turn.response .. delta.delta
+            turn.callbacks.on_update(turn.response)
         end
         return
     end
@@ -177,23 +195,37 @@ local function handle_stdout(_, data)
 end
 
 local function start_turn(question)
+    if question.cancelled then
+        schedule_shutdown_when_idle()
+        return
+    end
+
     send_request("turn/start", {
         threadId = question.thread_id,
         input = { { type = "text", text = question.prompt } },
         effort = question.options.reasoning_effort,
     }, function(turn_result, turn_error)
         if turn_error then
-            question.on_complete(nil, turn_error, question.thread_id)
+            if not question.cancelled then
+                question.callbacks.on_complete(nil, turn_error, question.thread_id)
+            end
             schedule_shutdown_when_idle()
             return
         end
 
         local turn = turn_result and turn_result.turn
         if not turn or not turn.id then
-            question.on_complete(nil, "Codex app server did not start a turn.", question.thread_id)
+            if not question.cancelled then
+                question.callbacks.on_complete(nil, "Codex app server did not start a turn.", question.thread_id)
+            end
             schedule_shutdown_when_idle()
             return
         end
+        if question.cancelled then
+            return
+        end
+
+        question.turn_id = turn.id
         state.turns[turn.id] = question
     end)
 end
@@ -203,7 +235,14 @@ local function resume_thread(question)
         threadId = question.thread_id,
     }, function(_, resume_error)
         if resume_error then
-            question.on_complete(nil, resume_error, question.thread_id)
+            if not question.cancelled then
+                question.callbacks.on_complete(nil, resume_error, question.thread_id)
+            end
+            schedule_shutdown_when_idle()
+            return
+        end
+
+        if question.cancelled then
             schedule_shutdown_when_idle()
             return
         end
@@ -231,14 +270,23 @@ local function ask_question(question)
         ephemeral = false,
     }, function(thread_result, thread_error)
         if thread_error then
-            question.on_complete(nil, thread_error)
+            if not question.cancelled then
+                question.callbacks.on_complete(nil, thread_error)
+            end
             schedule_shutdown_when_idle()
             return
         end
 
         local thread = thread_result and thread_result.thread
         if not thread or not thread.id then
-            question.on_complete(nil, "Codex app server did not create a thread.")
+            if not question.cancelled then
+                question.callbacks.on_complete(nil, "Codex app server did not create a thread.")
+            end
+            schedule_shutdown_when_idle()
+            return
+        end
+
+        if question.cancelled then
             schedule_shutdown_when_idle()
             return
         end
@@ -257,7 +305,9 @@ start_queued_questions = function()
     local queued_questions = state.queued_questions
     state.queued_questions = {}
     for _, question in ipairs(queued_questions) do
-        ask_question(question)
+        if not question.cancelled then
+            ask_question(question)
+        end
     end
 end
 
@@ -300,25 +350,51 @@ local function start_server(connector_options)
     end)
 end
 
-function M.ask(connector_options, question, selected_code, thread_id, on_complete)
+function M.ask(connector_options, question, selected_code, thread_id, callbacks)
+    if type(callbacks) == "function" then
+        callbacks = { on_complete = callbacks }
+    end
+    callbacks.on_update = callbacks.on_update or function() end
+
     if connector_options.auth == "api_key" and not vim.env[connector_options.api_key_env] then
-        on_complete(nil, "Set " .. connector_options.api_key_env .. " before starting Neovim.")
-        return
+        callbacks.on_complete(nil, "Set " .. connector_options.api_key_env .. " before starting Neovim.")
+        return nil
     end
 
-    stop_idle_timer()
-    table.insert(state.queued_questions, {
+    local request = {
+        callbacks = callbacks,
         options = connector_options,
         prompt = build_prompt(question, selected_code, thread_id == nil),
+        response = "",
         thread_id = thread_id,
-        on_complete = on_complete,
-    })
+    }
+
+    stop_idle_timer()
+    table.insert(state.queued_questions, request)
 
     if not state.job_id then
         start_server(connector_options)
     else
         start_queued_questions()
     end
+
+    return request
+end
+
+function M.cancel(request)
+    if not request or request.cancelled then
+        return
+    end
+
+    request.cancelled = true
+    if not request.turn_id or not request.thread_id or not state.job_id then
+        return
+    end
+
+    send_request("turn/interrupt", {
+        threadId = request.thread_id,
+        turnId = request.turn_id,
+    }, function() end)
 end
 
 -- Useful for Neovim shutdown hooks and tests; normal use relies on the idle timer.
