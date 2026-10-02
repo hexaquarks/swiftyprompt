@@ -2,9 +2,8 @@ local M = {}
 
 local IDLE_TIMEOUT_MS = 5 * 60 * 1000
 
--- The app server is deliberately shared by all SwiftPrompt conversations. Threads
--- remain ephemeral, but retaining the server avoids paying Codex's startup cost
--- for every question.
+-- The app server is deliberately shared by all SwiftPrompt conversations.
+-- Retaining the server avoids paying Codex's startup cost for every question.
 local state = {
     initialized = false,
     job_id = nil,
@@ -12,6 +11,7 @@ local state = {
     next_request_id = 0,
     requests = {},
     queued_questions = {},
+    active_thread_ids = {},
     turns = {},
     stdout_remainder = "",
     stderr = "",
@@ -31,6 +31,7 @@ local function reset_state()
     state.idle_timer = nil
     state.requests = {}
     state.queued_questions = {}
+    state.active_thread_ids = {}
     state.turns = {}
     state.stdout_remainder = ""
     state.stderr = ""
@@ -93,7 +94,11 @@ local function send_request(method, params, on_response)
     }) .. "\n")
 end
 
-local function build_prompt(question, selected_code, conversation_history)
+local function build_prompt(question, selected_code, is_new_thread)
+    if not is_new_thread then
+        return "Question: " .. question
+    end
+
     local codex_prompt = table.concat({
         "Answer this question about the selected code. Do not edit files.",
         "",
@@ -102,11 +107,6 @@ local function build_prompt(question, selected_code, conversation_history)
         selected_code,
         "```",
     }, "\n")
-
-    for _, previous_exchange in ipairs(conversation_history) do
-        codex_prompt = codex_prompt .. "\n\nPrevious question: " .. previous_exchange.question
-        codex_prompt = codex_prompt .. "\nPrevious answer: " .. previous_exchange.response
-    end
 
     return codex_prompt .. "\n\nQuestion: " .. question
 end
@@ -121,11 +121,11 @@ local function finish_turn(turn, completed_turn)
 
     if completed_turn.status ~= "completed" then
         local error = completed_turn.error and completed_turn.error.message
-        turn.on_complete(nil, error or "Codex did not complete the request.")
+        turn.on_complete(nil, error or "Codex did not complete the request.", turn.thread_id)
     elseif response and response ~= "" then
-        turn.on_complete(response, nil)
+        turn.on_complete(response, nil, turn.thread_id)
     else
-        turn.on_complete(nil, "Codex finished without an answer.")
+        turn.on_complete(nil, "Codex finished without an answer.", turn.thread_id)
     end
 end
 
@@ -176,13 +176,59 @@ local function handle_stdout(_, data)
     end
 end
 
+local function start_turn(question)
+    send_request("turn/start", {
+        threadId = question.thread_id,
+        input = { { type = "text", text = question.prompt } },
+        effort = question.options.reasoning_effort,
+    }, function(turn_result, turn_error)
+        if turn_error then
+            question.on_complete(nil, turn_error, question.thread_id)
+            schedule_shutdown_when_idle()
+            return
+        end
+
+        local turn = turn_result and turn_result.turn
+        if not turn or not turn.id then
+            question.on_complete(nil, "Codex app server did not start a turn.", question.thread_id)
+            schedule_shutdown_when_idle()
+            return
+        end
+        state.turns[turn.id] = question
+    end)
+end
+
+local function resume_thread(question)
+    send_request("thread/resume", {
+        threadId = question.thread_id,
+    }, function(_, resume_error)
+        if resume_error then
+            question.on_complete(nil, resume_error, question.thread_id)
+            schedule_shutdown_when_idle()
+            return
+        end
+
+        state.active_thread_ids[question.thread_id] = true
+        start_turn(question)
+    end)
+end
+
 local function ask_question(question)
+    if question.thread_id then
+        if state.active_thread_ids[question.thread_id] then
+            start_turn(question)
+        else
+            resume_thread(question)
+        end
+        return
+    end
+
     send_request("thread/start", {
         cwd = vim.fn.getcwd(),
         model = question.options.model,
         sandbox = question.options.sandbox,
         approvalPolicy = "never",
-        ephemeral = true,
+        ephemeral = false,
     }, function(thread_result, thread_error)
         if thread_error then
             question.on_complete(nil, thread_error)
@@ -197,25 +243,9 @@ local function ask_question(question)
             return
         end
 
-        send_request("turn/start", {
-            threadId = thread.id,
-            input = { { type = "text", text = question.prompt } },
-            effort = question.options.reasoning_effort,
-        }, function(turn_result, turn_error)
-            if turn_error then
-                question.on_complete(nil, turn_error)
-                schedule_shutdown_when_idle()
-                return
-            end
-
-            local turn = turn_result and turn_result.turn
-            if not turn or not turn.id then
-                question.on_complete(nil, "Codex app server did not start a turn.")
-                schedule_shutdown_when_idle()
-                return
-            end
-            state.turns[turn.id] = question
-        end)
+        question.thread_id = thread.id
+        state.active_thread_ids[thread.id] = true
+        start_turn(question)
     end)
 end
 
@@ -270,7 +300,7 @@ local function start_server(connector_options)
     end)
 end
 
-function M.ask(connector_options, question, selected_code, conversation_history, on_complete)
+function M.ask(connector_options, question, selected_code, thread_id, on_complete)
     if connector_options.auth == "api_key" and not vim.env[connector_options.api_key_env] then
         on_complete(nil, "Set " .. connector_options.api_key_env .. " before starting Neovim.")
         return
@@ -279,7 +309,8 @@ function M.ask(connector_options, question, selected_code, conversation_history,
     stop_idle_timer()
     table.insert(state.queued_questions, {
         options = connector_options,
-        prompt = build_prompt(question, selected_code, conversation_history),
+        prompt = build_prompt(question, selected_code, thread_id == nil),
+        thread_id = thread_id,
         on_complete = on_complete,
     })
 

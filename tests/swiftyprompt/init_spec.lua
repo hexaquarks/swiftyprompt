@@ -33,13 +33,13 @@ describe("SwiftPrompt interaction UI", function()
         vim.fn.mode = function()
             return "v"
         end
-        codex.ask = function(_, question, selected_code, conversation_history, on_complete)
+        codex.ask = function(_, question, selected_code, thread_id, on_complete)
             table.insert(codex_requests, {
                 question = question,
                 selected_code = selected_code,
-                conversation_history = vim.deepcopy(conversation_history),
+                thread_id = thread_id,
             })
-            on_complete(codex_response, nil)
+            on_complete(codex_response, nil, "thread-1")
         end
     end)
 
@@ -138,6 +138,17 @@ describe("SwiftPrompt interaction UI", function()
         assert.same("Follow-up — Enter to send", opened_window_configs[3].title:match("Follow%-up — Enter to send"))
         assert.same(6, opened_window_configs[3].row) -- three response lines + its border gap
         assert.same(3, opened_window_configs[3].height)
+    end)
+
+    it("reuses a thread after closing and reopening the same selection", function()
+        open_selection({ "one", "two", "three" }, { 1, 1 }, { 3, 2 })
+        submit_latest_prompt("Explain this")
+        vim.cmd("normal q")
+
+        open_selection({ "one", "two", "three" }, { 1, 1 }, { 3, 2 })
+        submit_latest_prompt("What should I change?")
+
+        assert.same("thread-1", codex_requests[2].thread_id)
     end)
 
     it("wraps question text within the three-line prompt input", function()
