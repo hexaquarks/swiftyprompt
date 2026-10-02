@@ -137,6 +137,87 @@ describe("Codex connector", function()
         assert.is_nil(sent_request(5).params.input[1].text:match("Selected code:"))
     end)
 
+    it("streams agent-message deltas before the turn completes", function()
+        local streamed_responses = {}
+        local request = codex.ask(options, "Explain this", "code", nil, {
+            on_complete = function() end,
+            on_update = function(response)
+                table.insert(streamed_responses, response)
+            end,
+        })
+        respond(1, {})
+        respond(3, { thread = { id = "thread-1" } })
+        respond(4, { turn = { id = "turn-1" } })
+
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            method = "item/agentMessage/delta",
+            params = {
+                delta = "First ",
+                itemId = "item-1",
+                threadId = "thread-1",
+                turnId = "turn-1",
+            },
+        }), "" })
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            method = "item/agentMessage/delta",
+            params = {
+                delta = "answer.",
+                itemId = "item-1",
+                threadId = "thread-1",
+                turnId = "turn-1",
+            },
+        }), "" })
+
+        assert.same({ "First ", "First answer." }, streamed_responses)
+        assert.same("turn-1", request.turn_id)
+    end)
+
+    it("interrupts an active turn and suppresses its late completion", function()
+        local completed = false
+        local request = codex.ask(options, "Explain this", "code", nil, {
+            on_complete = function()
+                completed = true
+            end,
+        })
+        respond(1, {})
+        respond(3, { thread = { id = "thread-1" } })
+        respond(4, { turn = { id = "turn-1" } })
+
+        codex.cancel(request)
+        assert.same("turn/interrupt", sent_request(5).method)
+        assert.same({ threadId = "thread-1", turnId = "turn-1" }, sent_request(5).params)
+        respond(5, {})
+
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            method = "turn/completed",
+            params = { turn = { id = "turn-1", status = "interrupted", items = {} } },
+        }), "" })
+
+        assert.is_false(completed)
+    end)
+
+    it("does not start a request cancelled before Codex initializes", function()
+        local request = codex.ask(options, "Explain this", "code", nil, function() end)
+        codex.cancel(request)
+        respond(1, {})
+
+        assert.same("initialized", sent_request(2).method)
+        assert.same(2, #sent_messages)
+    end)
+
+    it("does not start a turn when a thread request is cancelled", function()
+        local request = codex.ask(options, "Explain this", "code", nil, function() end)
+        respond(1, {})
+
+        codex.cancel(request)
+        respond(3, { thread = { id = "thread-1" } })
+
+        assert.same(3, #sent_messages)
+    end)
+
     it("resumes a saved thread after the idle server shuts down", function()
         codex.ask(options, "First?", "code", nil, function() end)
         respond(1, {})

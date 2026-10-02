@@ -19,6 +19,15 @@ local function close_window_if_valid(window_id)
 end
 
 local function close_conversation_windows(conversation)
+    if conversation.is_waiting then
+        local connector = connectors[conversation.connector_name]
+        if connector then
+            connector.cancel(conversation.request)
+        end
+        conversation.request = nil
+        conversation.is_waiting = false
+    end
+
     close_window_if_valid(conversation.question_window)
     close_window_if_valid(conversation.response_window)
 end
@@ -141,7 +150,7 @@ local function response_window_config(conversation)
         col = 0,
         style = "minimal",
         border = "rounded",
-        title = " Codex — f: follow up · q/Esc: close ",
+        title = " Codex — f: follow up · q/Esc: close or stop ",
         footer = " " .. model_name .. " ",
         footer_pos = "right",
     }
@@ -193,22 +202,41 @@ local function submit_question(conversation, question)
     end
 
     render_response(conversation, "Codex is thinking...")
-    connector.ask(
+    conversation.connector_name = connector_name
+    conversation.is_waiting = true
+    local request = connector.ask(
         connector_options,
         question,
         conversation.selected_code,
         conversation.thread_id,
-        function(response, error_message, thread_id)
-        if error_message then
-            render_response(conversation, error_message)
-            return
-        end
+        {
+            on_update = function(response)
+                if conversation.is_waiting then
+                    render_response(conversation, response)
+                end
+            end,
+            on_complete = function(response, error_message, thread_id)
+                if not conversation.is_waiting then
+                    return
+                end
 
-        conversation.thread_id = thread_id
-        thread_ids_by_conversation_key[conversation.key] = thread_id
-        render_response(conversation, response)
-        end
+                conversation.is_waiting = false
+                conversation.request = nil
+                if error_message then
+                    render_response(conversation, error_message)
+                    return
+                end
+
+                conversation.thread_id = thread_id
+                thread_ids_by_conversation_key[conversation.key] = thread_id
+                render_response(conversation, response)
+            end,
+        }
     )
+
+    if conversation.is_waiting then
+        conversation.request = request
+    end
 end
 
 local function open_question_prompt(conversation, row_offset, title)

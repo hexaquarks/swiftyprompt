@@ -3,6 +3,7 @@ local codex = require("swiftyprompt.connectors.codex")
 
 describe("SwiftPrompt interaction UI", function()
     local original_ask
+    local original_cancel
     local original_open_win
     local original_prompt_setcallback
     local original_mode
@@ -18,6 +19,7 @@ describe("SwiftPrompt interaction UI", function()
         codex_requests = {}
         codex_response = "first line\nsecond line\nthird line"
         original_ask = codex.ask
+        original_cancel = codex.cancel
         original_open_win = vim.api.nvim_open_win
         original_prompt_setcallback = vim.fn.prompt_setcallback
         original_mode = vim.fn.mode
@@ -33,18 +35,20 @@ describe("SwiftPrompt interaction UI", function()
         vim.fn.mode = function()
             return "v"
         end
-        codex.ask = function(_, question, selected_code, thread_id, on_complete)
+        codex.ask = function(_, question, selected_code, thread_id, callbacks)
             table.insert(codex_requests, {
                 question = question,
                 selected_code = selected_code,
                 thread_id = thread_id,
             })
-            on_complete(codex_response, nil, "thread-1")
+            callbacks.on_complete(codex_response, nil, "thread-1")
+            return {}
         end
     end)
 
     after_each(function()
         codex.ask = original_ask
+        codex.cancel = original_cancel
         vim.api.nvim_open_win = original_open_win
         vim.fn.prompt_setcallback = original_prompt_setcallback
         vim.fn.mode = original_mode
@@ -122,7 +126,7 @@ describe("SwiftPrompt interaction UI", function()
         submit_latest_prompt("Explain this")
         assert.same(table.concat({ "DEF", "ghiJKL", "mnop" }, "\n"), codex_requests[1].selected_code)
         assert.same("Explain this", codex_requests[1].question)
-        assert.same(" Codex — f: follow up · q/Esc: close ", opened_window_configs[2].title)
+        assert.same(" Codex — f: follow up · q/Esc: close or stop ", opened_window_configs[2].title)
         assert.same(" gpt-6-luna ", opened_window_configs[2].footer)
         assert.same("right", opened_window_configs[2].footer_pos)
     end)
@@ -149,6 +153,45 @@ describe("SwiftPrompt interaction UI", function()
         submit_latest_prompt("What should I change?")
 
         assert.same("thread-1", codex_requests[2].thread_id)
+    end)
+
+    it("streams response text into the response window", function()
+        local callbacks
+        codex.ask = function(_, _, _, _, request_callbacks)
+            callbacks = request_callbacks
+            return {}
+        end
+
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+        callbacks.on_update("First streamed sentence.")
+
+        local response_buffer = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+        assert.same({ "First streamed sentence." }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+
+        callbacks.on_complete("Complete response.", nil, "thread-1")
+        assert.same({ "Complete response." }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+    end)
+
+    it("cancels an in-progress request when Escape closes the response window", function()
+        local request = {}
+        local cancelled_request
+        codex.ask = function()
+            return request
+        end
+        codex.cancel = function(request_to_cancel)
+            cancelled_request = request_to_cancel
+        end
+
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+
+        local response_window = vim.api.nvim_get_current_win()
+        local escape = vim.fn.maparg("<Esc>", "n", false, true)
+        escape.callback()
+
+        assert.same(request, cancelled_request)
+        assert.is_false(vim.api.nvim_win_is_valid(response_window))
     end)
 
     it("wraps question text within the three-line prompt input", function()
