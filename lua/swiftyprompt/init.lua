@@ -9,6 +9,7 @@ local RESPONSE_WINDOW_WIDTH = 60
 local MAX_RESPONSE_WINDOW_HEIGHT = 12
 local QUESTION_WINDOW_HEIGHT = 3
 local RESPONSE_MARKDOWN_NAMESPACE = vim.api.nvim_create_namespace("swiftyprompt-response-markdown")
+local thread_ids_by_conversation_key = {}
 local MARKDOWN_DELIMITERS = { "***", "___", "**", "__", "~~", "`", "*", "_" }
 
 local function close_window_if_valid(window_id)
@@ -192,19 +193,22 @@ local function submit_question(conversation, question)
     end
 
     render_response(conversation, "Codex is thinking...")
-    connector.ask(connector_options, question, conversation.selected_code, conversation.history, function(response, error_message)
+    connector.ask(
+        connector_options,
+        question,
+        conversation.selected_code,
+        conversation.thread_id,
+        function(response, error_message, thread_id)
         if error_message then
             render_response(conversation, error_message)
             return
         end
 
-        -- The UI shows only the current response; Codex receives the full history.
-        table.insert(conversation.history, {
-            question = question,
-            response = response,
-        })
+        conversation.thread_id = thread_id
+        thread_ids_by_conversation_key[conversation.key] = thread_id
         render_response(conversation, response)
-    end)
+        end
+    )
 end
 
 local function open_question_prompt(conversation, row_offset, title)
@@ -285,13 +289,20 @@ local function extract_visual_selection(visual_start, cursor_position, visual_mo
     return table.concat(selected_lines, "\n")
 end
 
-local function start_conversation(source_window, anchor_line, anchor_column, selected_code)
+local function conversation_key(source_buffer, scope, selected_code)
+    return table.concat({ source_buffer, scope, selected_code }, "\0")
+end
+
+local function start_conversation(source_window, anchor_line, anchor_column, selected_code, scope)
+    local source_buffer = vim.api.nvim_win_get_buf(source_window)
+    local key = conversation_key(source_buffer, scope, selected_code)
     local conversation = {
         source_window = source_window,
         anchor_line = anchor_line,
         anchor_column = anchor_column,
         selected_code = selected_code,
-        history = {},
+        key = key,
+        thread_id = thread_ids_by_conversation_key[key],
     }
 
     open_question_prompt(conversation, 1, "Ask Codex — Enter to send")
@@ -309,7 +320,7 @@ function M.ask_about_current_file()
     local cursor_position = vim.api.nvim_win_get_cursor(source_window)
     local source_buffer = vim.api.nvim_get_current_buf()
     local file_lines = vim.api.nvim_buf_get_lines(source_buffer, 0, -1, false)
-    start_conversation(source_window, cursor_position[1] - 1, cursor_position[2], table.concat(file_lines, "\n"))
+    start_conversation(source_window, cursor_position[1] - 1, cursor_position[2], table.concat(file_lines, "\n"), "file")
 end
 
 function M.ask_about_visual_selection()
@@ -335,7 +346,14 @@ function M.ask_about_visual_selection()
 
     local anchor_column = math.floor(((visual_start[3] - 1) + cursor_position[2]) / 2)
     local selected_code = extract_visual_selection(visual_start, cursor_position, visual_mode)
-    start_conversation(source_window, anchor_line, anchor_column, selected_code)
+    local selection_scope = table.concat({
+        visual_mode,
+        visual_start[2],
+        visual_start[3],
+        cursor_position[1],
+        cursor_position[2],
+    }, ":")
+    start_conversation(source_window, anchor_line, anchor_column, selected_code, selection_scope)
 end
 
 local function find_innermost_symbol_at_line(document_symbols, cursor_line)
@@ -379,7 +397,14 @@ function M.ask_about_current_symbol()
                 source_window,
                 cursor_position[1] - 1,
                 cursor_position[2],
-                table.concat(symbol_lines, "\n")
+                table.concat(symbol_lines, "\n"),
+                table.concat({
+                    "symbol",
+                    symbol_range.start.line,
+                    symbol_range.start.character,
+                    symbol_range["end"].line,
+                    symbol_range["end"].character,
+                }, ":")
             )
             return
         end

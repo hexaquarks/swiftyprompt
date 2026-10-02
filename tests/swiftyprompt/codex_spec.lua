@@ -80,9 +80,7 @@ describe("Codex connector", function()
         local answer
         local error_message
 
-        codex.ask(options, "What does this do?", "local value = 1", {
-            { question = "What is value?", response = "It is a number." },
-        }, function(result, failure)
+        codex.ask(options, "What does this do?", "local value = 1", nil, function(result, failure)
             answer = result
             error_message = failure
         end)
@@ -93,13 +91,13 @@ describe("Codex connector", function()
         assert.same("thread/start", sent_request(3).method)
         assert.same("test-model", sent_request(3).params.model)
         assert.same("read-only", sent_request(3).params.sandbox)
+        assert.is_false(sent_request(3).params.ephemeral)
 
         respond(3, { thread = { id = "thread-1" } })
         assert.same("turn/start", sent_request(4).method)
         assert.same("thread-1", sent_request(4).params.threadId)
         assert.same("none", sent_request(4).params.effort)
         assert.matches("local value = 1", sent_request(4).params.input[1].text)
-        assert.matches("Previous question: What is value%?", sent_request(4).params.input[1].text)
         assert.matches("Question: What does this do%?", sent_request(4).params.input[1].text)
 
         respond(4, { turn = { id = "turn-1" } })
@@ -120,8 +118,8 @@ describe("Codex connector", function()
         assert.is_not_nil(callbacks.idle_timer)
     end)
 
-    it("reuses the server before its idle timer fires, then stops it", function()
-        codex.ask(options, "First?", "code", {}, function() end)
+    it("sends a follow-up to the existing thread without repeating its context", function()
+        codex.ask(options, "First?", "local value = 1", nil, function() end)
         respond(1, {})
         respond(3, { thread = { id = "thread-1" } })
         respond(4, { turn = { id = "turn-1" } })
@@ -131,7 +129,48 @@ describe("Codex connector", function()
             params = { turn = { id = "turn-1", status = "completed", items = {} } },
         }), "" })
 
-        codex.ask(options, "Second?", "code", {}, function() end)
+        codex.ask(options, "And now?", "local value = 1", "thread-1", function() end)
+
+        assert.same("turn/start", sent_request(5).method)
+        assert.same("thread-1", sent_request(5).params.threadId)
+        assert.matches("Question: And now%?", sent_request(5).params.input[1].text)
+        assert.is_nil(sent_request(5).params.input[1].text:match("Selected code:"))
+    end)
+
+    it("resumes a saved thread after the idle server shuts down", function()
+        codex.ask(options, "First?", "code", nil, function() end)
+        respond(1, {})
+        respond(3, { thread = { id = "thread-1" } })
+        respond(4, { turn = { id = "turn-1" } })
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            method = "turn/completed",
+            params = { turn = { id = "turn-1", status = "completed", items = {} } },
+        }), "" })
+        callbacks.idle_timer()
+
+        codex.ask(options, "And now?", "code", "thread-1", function() end)
+        respond(5, {})
+
+        assert.same("thread/resume", sent_request(7).method)
+        assert.same("thread-1", sent_request(7).params.threadId)
+        respond(7, { thread = { id = "thread-1" } })
+        assert.same("turn/start", sent_request(8).method)
+        assert.same("thread-1", sent_request(8).params.threadId)
+    end)
+
+    it("reuses the server before its idle timer fires, then stops it", function()
+        codex.ask(options, "First?", "code", nil, function() end)
+        respond(1, {})
+        respond(3, { thread = { id = "thread-1" } })
+        respond(4, { turn = { id = "turn-1" } })
+        callbacks.on_stdout(nil, { vim.json.encode({
+            jsonrpc = "2.0",
+            method = "turn/completed",
+            params = { turn = { id = "turn-1", status = "completed", items = {} } },
+        }), "" })
+
+        codex.ask(options, "Second?", "code", nil, function() end)
         assert.same("thread/start", sent_request(5).method)
         assert.same({ 7 }, stopped_timers)
 
@@ -149,7 +188,7 @@ describe("Codex connector", function()
     it("returns app-server errors", function()
         local answer
         local error_message
-        codex.ask(options, "Why?", "code", {}, function(result, failure)
+        codex.ask(options, "Why?", "code", nil, function(result, failure)
             answer = result
             error_message = failure
         end)
@@ -174,7 +213,7 @@ describe("Codex connector", function()
             sandbox = "read-only",
             auth = "api_key",
             api_key_env = "SWIFTPROMPT_TEST_API_KEY",
-        }, "Why?", "code", {}, function(result, failure)
+        }, "Why?", "code", nil, function(result, failure)
             answer = result
             error_message = failure
         end)
