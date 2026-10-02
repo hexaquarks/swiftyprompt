@@ -173,6 +173,38 @@ describe("SwiftPrompt interaction UI", function()
         assert.same({ "Complete response." }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
     end)
 
+    it("animates the thinking status until streamed text arrives", function()
+        local callbacks
+        codex.ask = function(_, _, _, _, request_callbacks)
+            callbacks = request_callbacks
+            return {}
+        end
+
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+
+        local response_buffer = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+        local first_status = vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false)[1]
+        assert.same(swiftyprompt.thinking_status_text(1), first_status)
+
+        assert.is_true(vim.wait(300, function()
+            local current_status = vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false)[1]
+            return current_status ~= first_status
+        end, 20))
+
+        callbacks.on_update("The answer is arriving.")
+        assert.same({ "The answer is arriving." }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+        vim.wait(150)
+        assert.same({ "The answer is arriving." }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+        callbacks.on_complete("The complete answer.", nil, "thread-1")
+    end)
+
+    it("cycles thinking-status frames without changing its message", function()
+        assert.same("◜  Codex is thinking", swiftyprompt.thinking_status_text(1))
+        assert.same("◠  Codex is thinking", swiftyprompt.thinking_status_text(2))
+        assert.same("◜  Codex is thinking", swiftyprompt.thinking_status_text(7))
+    end)
+
     it("cancels an in-progress request when Escape closes the response window", function()
         local request = {}
         local cancelled_request

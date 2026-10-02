@@ -11,6 +11,9 @@ local QUESTION_WINDOW_HEIGHT = 3
 local RESPONSE_MARKDOWN_NAMESPACE = vim.api.nvim_create_namespace("swiftyprompt-response-markdown")
 local thread_ids_by_conversation_key = {}
 local MARKDOWN_DELIMITERS = { "***", "___", "**", "__", "~~", "`", "*", "_" }
+local THINKING_FRAMES = { "◜", "◠", "◝", "◞", "◡", "◟" }
+local THINKING_FRAME_INTERVAL_MS = 120
+local stop_thinking_animation
 
 local function close_window_if_valid(window_id)
     if window_id and vim.api.nvim_win_is_valid(window_id) then
@@ -19,6 +22,8 @@ local function close_window_if_valid(window_id)
 end
 
 local function close_conversation_windows(conversation)
+    stop_thinking_animation(conversation)
+
     if conversation.is_waiting then
         local connector = connectors[conversation.connector_name]
         if connector then
@@ -30,6 +35,12 @@ local function close_conversation_windows(conversation)
 
     close_window_if_valid(conversation.question_window)
     close_window_if_valid(conversation.response_window)
+end
+
+function M.thinking_status_text(frame_index)
+    local frame_count = #THINKING_FRAMES
+    local normalized_index = ((frame_index - 1) % frame_count) + 1
+    return THINKING_FRAMES[normalized_index] .. "  Codex is thinking"
 end
 
 function M.split_response_lines(response_text)
@@ -191,6 +202,36 @@ local function render_response(conversation, response_text)
     set_close_keymaps(conversation.response_buffer, conversation)
 end
 
+stop_thinking_animation = function(conversation)
+    if not conversation.thinking_timer then
+        return
+    end
+
+    conversation.thinking_timer:stop()
+    conversation.thinking_timer:close()
+    conversation.thinking_timer = nil
+end
+
+local function start_thinking_animation(conversation)
+    stop_thinking_animation(conversation)
+
+    local frame_index = 1
+    render_response(conversation, M.thinking_status_text(frame_index))
+
+    local thinking_timer = vim.uv.new_timer()
+    conversation.thinking_timer = thinking_timer
+    thinking_timer:start(THINKING_FRAME_INTERVAL_MS, THINKING_FRAME_INTERVAL_MS, function()
+        vim.schedule(function()
+            if not conversation.is_waiting or conversation.thinking_timer ~= thinking_timer then
+                return
+            end
+
+            frame_index = frame_index + 1
+            render_response(conversation, M.thinking_status_text(frame_index))
+        end)
+    end)
+end
+
 local function submit_question(conversation, question)
     local connector_name = config.values.connector
     local connector = connectors[connector_name]
@@ -201,9 +242,9 @@ local function submit_question(conversation, question)
         return
     end
 
-    render_response(conversation, "Codex is thinking...")
     conversation.connector_name = connector_name
     conversation.is_waiting = true
+    start_thinking_animation(conversation)
     local request = connector.ask(
         connector_options,
         question,
@@ -212,6 +253,7 @@ local function submit_question(conversation, question)
         {
             on_update = function(response)
                 if conversation.is_waiting then
+                    stop_thinking_animation(conversation)
                     render_response(conversation, response)
                 end
             end,
@@ -222,6 +264,7 @@ local function submit_question(conversation, question)
 
                 conversation.is_waiting = false
                 conversation.request = nil
+                stop_thinking_animation(conversation)
                 if error_message then
                     render_response(conversation, error_message)
                     return
