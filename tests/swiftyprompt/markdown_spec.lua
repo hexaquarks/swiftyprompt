@@ -101,6 +101,26 @@ describe("SwiftPrompt Markdown rendering", function()
         assert.is_true(has_bullet(render_marks(has_bullet)))
     end)
 
+    it("renders newly visible Markdown through the cursor event", function()
+        local response_lines = { "# Introduction" }
+        for line_number = 2, 40 do
+            response_lines[line_number] = "Plain response text"
+        end
+        response_lines[40] = "- Newly visible bullet"
+        vim.api.nvim_buf_set_lines(buffer_id, 0, -1, false, response_lines)
+        assert.is_false(has_bullet(render_marks()))
+
+        vim.api.nvim_win_set_cursor(window_id, { 40, 0 })
+        vim.cmd("normal! zb")
+        vim.api.nvim_exec_autocmds("CursorMoved", { buffer = buffer_id })
+
+        local namespace = vim.api.nvim_create_namespace("render-markdown.nvim")
+        assert.is_true(vim.wait(1000, function()
+            local marks = vim.api.nvim_buf_get_extmarks(buffer_id, namespace, 0, -1, { details = true })
+            return has_bullet(marks)
+        end))
+    end)
+
     it("keeps responses readable when a Markdown parser is missing", function()
         vim.api.nvim_buf_set_lines(buffer_id, 0, -1, false, { "Readable response" })
         vim.treesitter.start = function()
