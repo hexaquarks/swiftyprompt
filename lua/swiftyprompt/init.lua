@@ -13,7 +13,19 @@ local thread_ids_by_conversation_key = {}
 local MARKDOWN_DELIMITERS = { "***", "___", "**", "__", "~~", "`", "*", "_" }
 local THINKING_FRAMES = { "◜", "◠", "◝", "◞", "◡", "◟" }
 local THINKING_FRAME_INTERVAL_MS = 120
+local PROMPT_TITLE_MAX_WIDTH = RESPONSE_WINDOW_WIDTH - 4
+local PROMPT_TITLE_PREFIX = "Ask "
+local PROMPT_TITLE_CONNECTOR = " about "
+local SYMBOL_TITLE_HIGHLIGHT = "SwiftypromptSymbol"
+local FILE_TITLE_HIGHLIGHT = "SwiftypromptFile"
+local CONTEXT_TITLE_HIGHLIGHTS = {
+    Symbol = SYMBOL_TITLE_HIGHLIGHT,
+    File = FILE_TITLE_HIGHLIGHT,
+}
 local stop_thinking_animation
+
+vim.api.nvim_set_hl(0, SYMBOL_TITLE_HIGHLIGHT, { link = "Identifier" })
+vim.api.nvim_set_hl(0, FILE_TITLE_HIGHLIGHT, { link = "Directory" })
 
 local function close_window_if_valid(window_id)
     if window_id and vim.api.nvim_win_is_valid(window_id) then
@@ -46,6 +58,54 @@ end
 function M.split_response_lines(response_text)
     local normalized_response = response_text:gsub("\r\n?", "\n")
     return vim.split(normalized_response, "\n", { plain = true, trimempty = false })
+end
+
+local function truncate_text(text, max_width)
+    if vim.fn.strdisplaywidth(text) <= max_width then
+        return text
+    end
+
+    local ellipsis = "…"
+    local available_width = max_width - vim.fn.strdisplaywidth(ellipsis)
+    local truncated_text = ""
+    local character_index = 0
+
+    while true do
+        local character = vim.fn.strcharpart(text, character_index, 1)
+        if character == "" then
+            break
+        end
+
+        local next_width = vim.fn.strdisplaywidth(truncated_text .. character)
+        if next_width > available_width then
+            break
+        end
+
+        truncated_text = truncated_text .. character
+        character_index = character_index + 1
+    end
+
+    return truncated_text .. ellipsis
+end
+
+local function prompt_title(conversation)
+    local agent_name = truncate_text(conversation.agent_name, 20)
+    local title_prefix = PROMPT_TITLE_PREFIX .. agent_name .. PROMPT_TITLE_CONNECTOR
+    local subject_width = PROMPT_TITLE_MAX_WIDTH
+        - vim.fn.strdisplaywidth(title_prefix)
+    local subject = truncate_text(conversation.context_subject, math.max(subject_width, 1))
+
+    local subject_highlight = CONTEXT_TITLE_HIGHLIGHTS[conversation.context_label]
+
+    if subject_highlight then
+        return {
+            { " " .. title_prefix, "FloatTitle" },
+            { subject, subject_highlight },
+            { " ", "FloatTitle" },
+        }
+    end
+
+    return " " .. title_prefix .. subject .. " "
 end
 
 local function response_display_height(response_lines)
@@ -303,7 +363,9 @@ local function open_question_prompt(conversation, row_offset, title)
         col = 0,
         style = "minimal",
         border = "rounded",
-        title = " " .. title .. " ",
+        title = title,
+        footer = " Enter to send ",
+        footer_pos = "right",
     })
     vim.wo[conversation.question_window].wrap = true
 
@@ -326,7 +388,11 @@ function M.open_follow_up_prompt(conversation)
     end
 
     -- Keep the editor directly below the visible response card.
-    open_question_prompt(conversation, conversation.response_window_height + 3, "Follow-up — Enter to send")
+    open_question_prompt(
+        conversation,
+        conversation.response_window_height + 3,
+        prompt_title(conversation)
+    )
 end
 
 local function extract_visual_selection(visual_start, cursor_position, visual_mode)
@@ -364,7 +430,7 @@ local function conversation_key(source_buffer, scope, selected_code)
     return table.concat({ source_buffer, scope, selected_code }, "\0")
 end
 
-local function start_conversation(source_window, anchor_line, anchor_column, selected_code, scope)
+local function start_conversation(source_window, anchor_line, anchor_column, selected_code, scope, context_label, context_subject)
     local source_buffer = vim.api.nvim_win_get_buf(source_window)
     local key = conversation_key(source_buffer, scope, selected_code)
     local conversation = {
@@ -374,9 +440,12 @@ local function start_conversation(source_window, anchor_line, anchor_column, sel
         selected_code = selected_code,
         key = key,
         thread_id = thread_ids_by_conversation_key[key],
+        context_label = context_label,
+        context_subject = context_subject,
+        agent_name = "Codex",
     }
 
-    open_question_prompt(conversation, 1, "Ask Codex — Enter to send")
+    open_question_prompt(conversation, 1, prompt_title(conversation))
 end
 
 function M.notify_selection_required()
@@ -386,12 +455,29 @@ function M.notify_selection_required()
     )
 end
 
+local function current_file_display_name(buffer_id)
+    local buffer_name = vim.api.nvim_buf_get_name(buffer_id)
+    if buffer_name == "" then
+        return "this buffer"
+    end
+
+    return vim.fn.fnamemodify(buffer_name, ":t")
+end
+
 function M.ask_about_current_file()
     local source_window = vim.api.nvim_get_current_win()
     local cursor_position = vim.api.nvim_win_get_cursor(source_window)
     local source_buffer = vim.api.nvim_get_current_buf()
     local file_lines = vim.api.nvim_buf_get_lines(source_buffer, 0, -1, false)
-    start_conversation(source_window, cursor_position[1] - 1, cursor_position[2], table.concat(file_lines, "\n"), "file")
+    start_conversation(
+        source_window,
+        cursor_position[1] - 1,
+        cursor_position[2],
+        table.concat(file_lines, "\n"),
+        "file",
+        "File",
+        current_file_display_name(source_buffer)
+    )
 end
 
 function M.ask_about_visual_selection()
@@ -424,7 +510,7 @@ function M.ask_about_visual_selection()
         cursor_position[1],
         cursor_position[2],
     }, ":")
-    start_conversation(source_window, anchor_line, anchor_column, selected_code, selection_scope)
+    start_conversation(source_window, anchor_line, anchor_column, selected_code, selection_scope, "Selection", "selected code")
 end
 
 local function find_innermost_symbol_at_line(document_symbols, cursor_line)
@@ -437,6 +523,18 @@ local function find_innermost_symbol_at_line(document_symbols, cursor_line)
             return nested_symbol or document_symbol
         end
     end
+end
+
+local function symbol_display_name(symbol)
+    local candidate_names = { symbol.name or false, symbol.detail or false }
+
+    for _, candidate_name in ipairs(candidate_names) do
+        if type(candidate_name) == "string" and vim.trim(candidate_name) ~= "" then
+            return vim.trim(candidate_name)
+        end
+    end
+
+    return "this symbol"
 end
 
 function M.ask_about_current_symbol()
@@ -475,7 +573,9 @@ function M.ask_about_current_symbol()
                     symbol_range.start.character,
                     symbol_range["end"].line,
                     symbol_range["end"].character,
-                }, ":")
+                }, ":"),
+                "Symbol",
+                symbol_display_name(selected_symbol)
             )
             return
         end
