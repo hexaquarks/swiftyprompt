@@ -9,9 +9,12 @@ describe("SwiftPrompt interaction UI", function()
     local original_buf_request_sync
     local original_mode
     local original_getpos
+    local original_notify
+    local original_selection
     local opened_window_configs
     local question_prompt_callbacks
     local codex_requests
+    local notifications
     local codex_response
 
     before_each(function()
@@ -26,6 +29,9 @@ describe("SwiftPrompt interaction UI", function()
         original_buf_request_sync = vim.lsp.buf_request_sync
         original_mode = vim.fn.mode
         original_getpos = vim.fn.getpos
+        original_notify = vim.notify
+        original_selection = vim.o.selection
+        notifications = {}
 
         vim.api.nvim_open_win = function(buffer_id, enter_window, window_config)
             table.insert(opened_window_configs, vim.deepcopy(window_config))
@@ -36,6 +42,9 @@ describe("SwiftPrompt interaction UI", function()
         end
         vim.fn.mode = function()
             return "v"
+        end
+        vim.notify = function(message, level)
+            table.insert(notifications, { message = message, level = level })
         end
         codex.ask = function(_, question, selected_code, thread_id, callbacks)
             table.insert(codex_requests, {
@@ -56,6 +65,8 @@ describe("SwiftPrompt interaction UI", function()
         vim.lsp.buf_request_sync = original_buf_request_sync
         vim.fn.mode = original_mode
         vim.fn.getpos = original_getpos
+        vim.notify = original_notify
+        vim.o.selection = original_selection
 
         for _, window in ipairs(vim.api.nvim_list_wins()) do
             local config = vim.api.nvim_win_get_config(window)
@@ -481,6 +492,39 @@ describe("SwiftPrompt interaction UI", function()
         assert.same("  local one = 1\n\n  return one", codex_requests[1].selected_code)
     end)
 
+    it("rejects an empty Visual selection", function()
+        open_selection({ "" }, { 1, 1 }, { 1, 0 })
+
+        assert.same({}, opened_window_configs)
+        assert.same({}, codex_requests)
+        assert.same({
+            {
+                message = "SwiftPrompt: select non-empty code first, then press <leader>aa",
+                level = vim.log.levels.INFO,
+            },
+        }, notifications)
+    end)
+
+    it("rejects a whitespace-only Visual selection", function()
+        open_selection({ "   ", "\t" }, { 1, 1 }, { 2, 0 }, "V")
+
+        assert.same({}, opened_window_configs)
+        assert.same({}, codex_requests)
+        assert.same(1, #notifications)
+    end)
+
+    it("honors exclusive characterwise selections in either direction", function()
+        vim.o.selection = "exclusive"
+
+        open_selection({ "abcd" }, { 1, 1 }, { 1, 2 })
+        submit_latest_prompt("Explain this")
+        assert.same("ab", codex_requests[1].selected_code)
+
+        open_selection({ "abcd" }, { 1, 3 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+        assert.same("ab", codex_requests[2].selected_code)
+    end)
+
     it("extracts a rectangle for a blockwise Visual selection", function()
         open_selection({ "abcDEF", "ghiJKL", "mnopqr" }, { 1, 3 }, { 3, 3 }, "\22")
         submit_latest_prompt("Explain this")
@@ -493,5 +537,12 @@ describe("SwiftPrompt interaction UI", function()
         submit_latest_prompt("Explain this")
 
         assert.same("bcDE\nhiJK\nnopq", codex_requests[1].selected_code)
+    end)
+
+    it("uses displayed columns for blockwise selections with short, tab, and wide-character lines", function()
+        open_selection({ "a界cd", "a\tcd", "x", "abcdef" }, { 1, 2 }, { 4, 4 }, "\22")
+        submit_latest_prompt("Explain this")
+
+        assert.same("界cd\n    \n\nbcde", codex_requests[1].selected_code)
     end)
 end)

@@ -396,33 +396,10 @@ function M.open_follow_up_prompt(conversation)
 end
 
 local function extract_visual_selection(visual_start, cursor_position, visual_mode)
-    local start_line = visual_start[2] - 1
-    local start_column = visual_start[3] - 1
-    local end_line = cursor_position[1] - 1
-    local end_column = cursor_position[2]
-
-    if start_line > end_line or (start_line == end_line and start_column > end_column) then
-        start_line, end_line = end_line, start_line
-        start_column, end_column = end_column, start_column
-    end
-
-    -- Linewise selections include whole lines. Blockwise selections form a rectangle.
-    if visual_mode == "V" then
-        return table.concat(vim.api.nvim_buf_get_lines(0, start_line, end_line + 1, false), "\n")
-    end
-
-    if visual_mode == "\22" then
-        local selected_lines = {}
-        local first_column = math.min(start_column, end_column)
-        local last_column = math.max(start_column, end_column)
-        for line_index = start_line, end_line do
-            local line_text = vim.api.nvim_buf_get_text(0, line_index, first_column, line_index, last_column + 1, {})
-            table.insert(selected_lines, line_text[1] or "")
-        end
-        return table.concat(selected_lines, "\n")
-    end
-
-    local selected_lines = vim.api.nvim_buf_get_text(0, start_line, start_column, end_line, end_column + 1, {})
+    local cursor_position_for_region = { 0, cursor_position[1], cursor_position[2] + 1, 0 }
+    local selected_lines = vim.fn.getregion(visual_start, cursor_position_for_region, {
+        type = visual_mode,
+    })
     return table.concat(selected_lines, "\n")
 end
 
@@ -485,6 +462,16 @@ function M.ask_about_visual_selection()
     local visual_start = vim.fn.getpos("v")
     local cursor_position = vim.api.nvim_win_get_cursor(source_window)
     local visual_mode = vim.fn.mode(1)
+    local selected_code = extract_visual_selection(visual_start, cursor_position, visual_mode)
+
+    if not selected_code:match("%S") then
+        vim.notify(
+            "SwiftPrompt: select non-empty code first, then press " .. config.values.selection_keymap,
+            vim.log.levels.INFO
+        )
+        return
+    end
+
     local first_selected_line = math.min(visual_start[2] - 1, cursor_position[1] - 1)
     local last_selected_line = math.max(visual_start[2] - 1, cursor_position[1] - 1)
     local selected_lines = vim.api.nvim_buf_get_lines(0, first_selected_line, last_selected_line + 1, false)
@@ -502,7 +489,6 @@ function M.ask_about_visual_selection()
     end
 
     local anchor_column = math.floor(((visual_start[3] - 1) + cursor_position[2]) / 2)
-    local selected_code = extract_visual_selection(visual_start, cursor_position, visual_mode)
     local selection_scope = table.concat({
         visual_mode,
         visual_start[2],
