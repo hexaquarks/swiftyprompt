@@ -6,6 +6,7 @@ describe("SwiftPrompt interaction UI", function()
     local original_cancel
     local original_open_win
     local original_prompt_setcallback
+    local original_buf_request_sync
     local original_mode
     local original_getpos
     local opened_window_configs
@@ -22,6 +23,7 @@ describe("SwiftPrompt interaction UI", function()
         original_cancel = codex.cancel
         original_open_win = vim.api.nvim_open_win
         original_prompt_setcallback = vim.fn.prompt_setcallback
+        original_buf_request_sync = vim.lsp.buf_request_sync
         original_mode = vim.fn.mode
         original_getpos = vim.fn.getpos
 
@@ -51,6 +53,7 @@ describe("SwiftPrompt interaction UI", function()
         codex.cancel = original_cancel
         vim.api.nvim_open_win = original_open_win
         vim.fn.prompt_setcallback = original_prompt_setcallback
+        vim.lsp.buf_request_sync = original_buf_request_sync
         vim.fn.mode = original_mode
         vim.fn.getpos = original_getpos
 
@@ -120,7 +123,9 @@ describe("SwiftPrompt interaction UI", function()
             col = 0,
             style = "minimal",
             border = "rounded",
-            title = " Ask Codex — Enter to send ",
+            title = " Ask Codex about selected code ",
+            footer = " Enter to send ",
+            footer_pos = "right",
         }, opened_window_configs[1])
 
         submit_latest_prompt("Explain this")
@@ -139,17 +144,182 @@ describe("SwiftPrompt interaction UI", function()
         -- mapping provides the same path a user takes by pressing f.
         vim.cmd("normal f")
 
-        assert.same("Follow-up — Enter to send", opened_window_configs[3].title:match("Follow%-up — Enter to send"))
+        assert.same(" Ask Codex about selected code ", opened_window_configs[3].title)
         assert.same(6, opened_window_configs[3].row) -- three response lines + its border gap
         assert.same(3, opened_window_configs[3].height)
     end)
 
+    it("labels file prompts and responses with their context", function()
+        local source_window = vim.api.nvim_get_current_win()
+        local source_buffer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_win_set_buf(source_window, source_buffer)
+        vim.api.nvim_buf_set_name(source_buffer, "/tmp/settings.lua")
+        vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, { "local value = 1" })
+
+        swiftyprompt.ask_about_current_file()
+        assert.same({
+            { " Ask Codex about ", "FloatTitle" },
+            { "settings.lua", "SwiftypromptFile" },
+            { " ", "FloatTitle" },
+        }, opened_window_configs[1].title)
+
+        submit_latest_prompt("Explain this")
+        assert.same(" Codex — f: follow up · q/Esc: close or stop ", opened_window_configs[2].title)
+    end)
+
+    it("labels unnamed file prompts as the current buffer", function()
+        local source_window = vim.api.nvim_get_current_win()
+        local source_buffer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_win_set_buf(source_window, source_buffer)
+        vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, { "local value = 1" })
+
+        swiftyprompt.ask_about_current_file()
+
+        assert.same({
+            { " Ask Codex about ", "FloatTitle" },
+            { "this buffer", "SwiftypromptFile" },
+            { " ", "FloatTitle" },
+        }, opened_window_configs[1].title)
+    end)
+
+    it("labels symbol prompts and responses with their context", function()
+        local source_window = vim.api.nvim_get_current_win()
+        local source_buffer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_win_set_buf(source_window, source_buffer)
+        vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, {
+            "local function greet()",
+            "  return 'hello'",
+            "end",
+        })
+        vim.api.nvim_win_set_cursor(source_window, { 1, 0 })
+        vim.lsp.buf_request_sync = function()
+            return {
+                [1] = {
+                    result = {
+                        {
+                            name = "greet",
+                            range = {
+                                start = { line = 0, character = 0 },
+                                ["end"] = { line = 2, character = 3 },
+                            },
+                        },
+                    },
+                },
+            }
+        end
+
+        swiftyprompt.ask_about_current_symbol()
+        assert.same({
+            { " Ask Codex about ", "FloatTitle" },
+            { "greet", "SwiftypromptSymbol" },
+            { " ", "FloatTitle" },
+        }, opened_window_configs[1].title)
+
+        submit_latest_prompt("Explain this")
+        assert.same(" Codex — f: follow up · q/Esc: close or stop ", opened_window_configs[2].title)
+    end)
+
+    it("truncates long symbol names in prompt titles", function()
+        local source_window = vim.api.nvim_get_current_win()
+        local source_buffer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_win_set_buf(source_window, source_buffer)
+        vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, { "local value = 1" })
+        local long_symbol_name = string.rep("very_long_symbol_name_", 4)
+        vim.lsp.buf_request_sync = function()
+            return {
+                [1] = {
+                    result = {
+                        {
+                            name = long_symbol_name,
+                            range = {
+                                start = { line = 0, character = 0 },
+                                ["end"] = { line = 0, character = 15 },
+                            },
+                        },
+                    },
+                },
+            }
+        end
+
+        swiftyprompt.ask_about_current_symbol()
+
+        local title = opened_window_configs[1].title
+        local title_text = title[1][1] .. title[2][1] .. title[3][1]
+        assert.matches("Ask Codex about very_long_symbol_name", title_text)
+        assert.matches("…", title[2][1])
+        assert.same("SwiftypromptSymbol", title[2][2])
+        assert.is_true(vim.fn.strdisplaywidth(title_text) <= 60)
+    end)
+
+    it("uses a non-empty symbol detail when the LSP omits its name", function()
+        local source_window = vim.api.nvim_get_current_win()
+        local source_buffer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_win_set_buf(source_window, source_buffer)
+        vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, { "local value = 1" })
+        vim.lsp.buf_request_sync = function()
+            return {
+                [1] = {
+                    result = {
+                        {
+                            name = "",
+                            detail = "M.setup",
+                            range = {
+                                start = { line = 0, character = 0 },
+                                ["end"] = { line = 0, character = 15 },
+                            },
+                        },
+                    },
+                },
+            }
+        end
+
+        swiftyprompt.ask_about_current_symbol()
+
+        assert.same({
+            { " Ask Codex about ", "FloatTitle" },
+            { "M.setup", "SwiftypromptSymbol" },
+            { " ", "FloatTitle" },
+        }, opened_window_configs[1].title)
+    end)
+
+    it("uses a generic label when the LSP returns no symbol text", function()
+        local source_window = vim.api.nvim_get_current_win()
+        local source_buffer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_win_set_buf(source_window, source_buffer)
+        vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, { "local value = 1" })
+        vim.lsp.buf_request_sync = function()
+            return {
+                [1] = {
+                    result = {
+                        {
+                            name = "",
+                            detail = " ",
+                            range = {
+                                start = { line = 0, character = 0 },
+                                ["end"] = { line = 0, character = 15 },
+                            },
+                        },
+                    },
+                },
+            }
+        end
+
+        swiftyprompt.ask_about_current_symbol()
+
+        assert.same({
+            { " Ask Codex about ", "FloatTitle" },
+            { "this symbol", "SwiftypromptSymbol" },
+            { " ", "FloatTitle" },
+        }, opened_window_configs[1].title)
+    end)
+
     it("reuses a thread after closing and reopening the same selection", function()
-        open_selection({ "one", "two", "three" }, { 1, 1 }, { 3, 2 })
+        local source_window = open_selection({ "one", "two", "three" }, { 1, 1 }, { 3, 2 })
         submit_latest_prompt("Explain this")
         vim.cmd("normal q")
 
-        open_selection({ "one", "two", "three" }, { 1, 1 }, { 3, 2 })
+        vim.api.nvim_win_set_cursor(source_window, { 3, 2 })
+        swiftyprompt.ask_about_visual_selection()
         submit_latest_prompt("What should I change?")
 
         assert.same("thread-1", codex_requests[2].thread_id)
