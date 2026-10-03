@@ -131,6 +131,18 @@ local function set_close_keymaps(buffer_id, conversation)
     end
 end
 
+local function block_global_keymaps(buffer_id, modes)
+    for _, mode in ipairs(modes) do
+        for _, keymap in ipairs(vim.api.nvim_get_keymap(mode)) do
+            vim.keymap.set(mode, keymap.lhs, "<Nop>", {
+                buffer = buffer_id,
+                nowait = true,
+                remap = false,
+            })
+        end
+    end
+end
+
 local function conceal_markdown_delimiters(buffer_id)
     vim.api.nvim_buf_clear_namespace(buffer_id, RESPONSE_MARKDOWN_NAMESPACE, 0, -1)
 
@@ -235,6 +247,12 @@ local function render_response(conversation, response_text)
         conversation.response_buffer = vim.api.nvim_create_buf(false, true)
         -- Keep Markdown highlighting, but hide document-lint warnings on AI replies.
         vim.diagnostic.enable(false, { bufnr = conversation.response_buffer })
+        block_global_keymaps(conversation.response_buffer, { "n" })
+        vim.keymap.set("n", "<C-o>", "<Nop>", {
+            buffer = conversation.response_buffer,
+            nowait = true,
+            remap = false,
+        })
     end
 
     vim.bo[conversation.response_buffer].readonly = false
@@ -351,6 +369,14 @@ local function open_question_prompt(conversation, row_offset, title)
     -- Neovim keeps a modified unnamed buffer and asks to save it on exit.
     vim.bo[question_buffer].bufhidden = "wipe"
     vim.fn.prompt_setprompt(question_buffer, "Ask: ")
+    block_global_keymaps(question_buffer, { "n", "i" })
+    for _, mode in ipairs({ "n", "i" }) do
+        vim.keymap.set(mode, "<C-o>", "<Nop>", {
+            buffer = question_buffer,
+            nowait = true,
+            remap = false,
+        })
+    end
 
     conversation.question_window = vim.api.nvim_open_win(question_buffer, true, {
         relative = "win",
