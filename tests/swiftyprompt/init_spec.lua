@@ -14,6 +14,7 @@ describe("SwiftPrompt interaction UI", function()
     local original_normal_control_o
     local original_insert_control_o
     local original_normal_f9
+    local original_insert_enter
     local opened_window_configs
     local question_prompt_callbacks
     local codex_requests
@@ -37,6 +38,7 @@ describe("SwiftPrompt interaction UI", function()
         original_normal_control_o = vim.fn.maparg("<C-o>", "n", false, true)
         original_insert_control_o = vim.fn.maparg("<C-o>", "i", false, true)
         original_normal_f9 = vim.fn.maparg("<F9>", "n", false, true)
+        original_insert_enter = vim.fn.maparg("<CR>", "i", false, true)
         notifications = {}
 
         vim.api.nvim_open_win = function(buffer_id, enter_window, window_config)
@@ -76,6 +78,7 @@ describe("SwiftPrompt interaction UI", function()
         pcall(vim.keymap.del, "n", "<C-o>")
         pcall(vim.keymap.del, "i", "<C-o>")
         pcall(vim.keymap.del, "n", "<F9>")
+        pcall(vim.keymap.del, "i", "<CR>")
         if next(original_normal_control_o) then
             vim.fn.mapset("n", false, original_normal_control_o)
         end
@@ -84,6 +87,9 @@ describe("SwiftPrompt interaction UI", function()
         end
         if next(original_normal_f9) then
             vim.fn.mapset("n", false, original_normal_f9)
+        end
+        if next(original_insert_enter) then
+            vim.fn.mapset("i", false, original_insert_enter)
         end
 
         for _, window in ipairs(vim.api.nvim_list_wins()) do
@@ -521,6 +527,24 @@ describe("SwiftPrompt interaction UI", function()
         vim.api.nvim_feedkeys(vim.keycode("<C-o>"), "mtx", false)
         assert.same(0, global_mapping_count)
         assert.same(prompt_buffer, vim.api.nvim_get_current_buf())
+    end)
+
+    it("preserves Enter to submit from the question prompt", function()
+        local global_mapping_count = 0
+        vim.keymap.set("i", "<CR>", function()
+            global_mapping_count = global_mapping_count + 1
+        end)
+        vim.fn.prompt_setcallback = original_prompt_setcallback
+
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+
+        local enter_mapping = vim.fn.maparg("<CR>", "i", false, true)
+        assert.same(1, enter_mapping.buffer)
+        assert.same("<CR>", enter_mapping.rhs)
+
+        vim.api.nvim_feedkeys(vim.keycode("iExplain this<CR>"), "mtx", false)
+        assert.same(0, global_mapping_count)
+        assert.same("Explain this", codex_requests[1].question)
     end)
 
     it("blocks global Control-O mappings inside the response dialog", function()

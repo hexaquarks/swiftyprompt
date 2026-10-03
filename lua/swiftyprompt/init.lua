@@ -377,6 +377,11 @@ local function open_question_prompt(conversation, row_offset, title)
             remap = false,
         })
     end
+    vim.keymap.set("i", "<CR>", "<CR>", {
+        buffer = question_buffer,
+        nowait = true,
+        remap = false,
+    })
 
     conversation.question_window = vim.api.nvim_open_win(question_buffer, true, {
         relative = "win",
