@@ -8,9 +8,8 @@ local connectors = {
 local RESPONSE_WINDOW_WIDTH = 60
 local MAX_RESPONSE_WINDOW_HEIGHT = 12
 local QUESTION_WINDOW_HEIGHT = 3
-local RESPONSE_MARKDOWN_NAMESPACE = vim.api.nvim_create_namespace("swiftyprompt-response-markdown")
+local markdown = require("swiftyprompt.markdown")
 local thread_ids_by_conversation_key = {}
-local MARKDOWN_DELIMITERS = { "***", "___", "**", "__", "~~", "`", "*", "_" }
 local THINKING_FRAMES = { "◜", "◠", "◝", "◞", "◡", "◟" }
 local THINKING_FRAME_INTERVAL_MS = 120
 local PROMPT_TITLE_MAX_WIDTH = RESPONSE_WINDOW_WIDTH - 4
@@ -148,66 +147,11 @@ local function block_global_keymaps(buffer_id, modes)
     end
 end
 
-local function conceal_markdown_delimiters(buffer_id)
-    vim.api.nvim_buf_clear_namespace(buffer_id, RESPONSE_MARKDOWN_NAMESPACE, 0, -1)
-
-    for line_index, line_text in ipairs(vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)) do
-        local claimed_columns = {}
-
-        for _, delimiter in ipairs(MARKDOWN_DELIMITERS) do
-            local delimiter_length = #delimiter
-            local search_start = 1
-
-            local function delimiter_is_available(delimiter_column)
-                local start_column = delimiter_column - 1
-                for column = start_column, start_column + delimiter_length - 1 do
-                    if claimed_columns[column] then
-                        return false
-                    end
-                end
-
-                return true
-            end
-
-            while true do
-                local opening_column = line_text:find(delimiter, search_start, true)
-                if not opening_column then
-                    break
-                end
-
-                local closing_column = line_text:find(delimiter, opening_column + delimiter_length, true)
-                local opening_content = line_text:sub(opening_column + delimiter_length, opening_column + delimiter_length)
-                local closing_content = closing_column and line_text:sub(closing_column - 1, closing_column - 1)
-                local has_content = closing_content and opening_content:match("%S") and closing_content:match("%S")
-                local delimiters_are_available = closing_column
-                    and delimiter_is_available(opening_column)
-                    and delimiter_is_available(closing_column)
-
-                if has_content and delimiters_are_available then
-                    for _, delimiter_column in ipairs({ opening_column, closing_column }) do
-                        local start_column = delimiter_column - 1
-                        vim.api.nvim_buf_set_extmark(buffer_id, RESPONSE_MARKDOWN_NAMESPACE, line_index - 1, start_column, {
-                            end_col = start_column + delimiter_length,
-                            conceal = "",
-                        })
-
-                        for column = start_column, start_column + delimiter_length - 1 do
-                            claimed_columns[column] = true
-                        end
-                    end
-                end
-
-                search_start = (closing_column or opening_column) + delimiter_length
-            end
-        end
-    end
-end
-
 local function configure_response_display(buffer_id, window_id)
     vim.wo[window_id].wrap = true
-    vim.wo[window_id].conceallevel = 3
+    vim.wo[window_id].conceallevel = 2
     vim.wo[window_id].concealcursor = "nvic"
-    conceal_markdown_delimiters(buffer_id)
+    markdown.render(buffer_id, window_id)
 
     for _, motion in ipairs({
         { key = "j", wrapped_key = "gj" },
@@ -263,7 +207,7 @@ local function render_response(conversation, response_text)
     vim.bo[conversation.response_buffer].readonly = false
     vim.bo[conversation.response_buffer].modifiable = true
     vim.api.nvim_buf_set_lines(conversation.response_buffer, 0, -1, false, response_lines)
-    vim.bo[conversation.response_buffer].filetype = "markdown"
+    vim.bo[conversation.response_buffer].filetype = markdown.filetype
     vim.bo[conversation.response_buffer].modified = false
     vim.bo[conversation.response_buffer].modifiable = false
     vim.bo[conversation.response_buffer].readonly = true
