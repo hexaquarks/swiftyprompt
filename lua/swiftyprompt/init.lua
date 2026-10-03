@@ -129,6 +129,11 @@ local function set_close_keymaps(buffer_id, conversation)
             desc = "Close SwiftPrompt",
         })
     end
+
+    vim.keymap.set("i", "<Esc>", close_conversation, {
+        buffer = buffer_id,
+        desc = "Close SwiftPrompt",
+    })
 end
 
 local function block_global_keymaps(buffer_id, modes)
@@ -377,11 +382,13 @@ local function open_question_prompt(conversation, row_offset, title)
             remap = false,
         })
     end
-    vim.keymap.set("i", "<CR>", "<CR>", {
-        buffer = question_buffer,
-        nowait = true,
-        remap = false,
-    })
+    for _, input_key in ipairs({ "<BS>", "<C-h>", "<Del>", "<CR>" }) do
+        vim.keymap.set("i", input_key, input_key, {
+            buffer = question_buffer,
+            nowait = true,
+            remap = false,
+        })
+    end
 
     conversation.question_window = vim.api.nvim_open_win(question_buffer, true, {
         relative = "win",

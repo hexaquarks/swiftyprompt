@@ -15,6 +15,8 @@ describe("SwiftPrompt interaction UI", function()
     local original_insert_control_o
     local original_normal_f9
     local original_insert_enter
+    local original_insert_backspace
+    local original_insert_escape
     local opened_window_configs
     local question_prompt_callbacks
     local codex_requests
@@ -39,6 +41,8 @@ describe("SwiftPrompt interaction UI", function()
         original_insert_control_o = vim.fn.maparg("<C-o>", "i", false, true)
         original_normal_f9 = vim.fn.maparg("<F9>", "n", false, true)
         original_insert_enter = vim.fn.maparg("<CR>", "i", false, true)
+        original_insert_backspace = vim.fn.maparg("<BS>", "i", false, true)
+        original_insert_escape = vim.fn.maparg("<Esc>", "i", false, true)
         notifications = {}
 
         vim.api.nvim_open_win = function(buffer_id, enter_window, window_config)
@@ -79,6 +83,8 @@ describe("SwiftPrompt interaction UI", function()
         pcall(vim.keymap.del, "i", "<C-o>")
         pcall(vim.keymap.del, "n", "<F9>")
         pcall(vim.keymap.del, "i", "<CR>")
+        pcall(vim.keymap.del, "i", "<BS>")
+        pcall(vim.keymap.del, "i", "<Esc>")
         if next(original_normal_control_o) then
             vim.fn.mapset("n", false, original_normal_control_o)
         end
@@ -90,6 +96,12 @@ describe("SwiftPrompt interaction UI", function()
         end
         if next(original_insert_enter) then
             vim.fn.mapset("i", false, original_insert_enter)
+        end
+        if next(original_insert_backspace) then
+            vim.fn.mapset("i", false, original_insert_backspace)
+        end
+        if next(original_insert_escape) then
+            vim.fn.mapset("i", false, original_insert_escape)
         end
 
         for _, window in ipairs(vim.api.nvim_list_wins()) do
@@ -545,6 +557,38 @@ describe("SwiftPrompt interaction UI", function()
         vim.api.nvim_feedkeys(vim.keycode("iExplain this<CR>"), "mtx", false)
         assert.same(0, global_mapping_count)
         assert.same("Explain this", codex_requests[1].question)
+    end)
+
+    it("preserves Backspace while editing a question prompt", function()
+        local global_mapping_count = 0
+        vim.keymap.set("i", "<BS>", function()
+            global_mapping_count = global_mapping_count + 1
+        end)
+        vim.fn.prompt_setcallback = original_prompt_setcallback
+
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+
+        local backspace_mapping = vim.fn.maparg("<BS>", "i", false, true)
+        assert.same(1, backspace_mapping.buffer)
+        assert.same("<BS>", backspace_mapping.rhs)
+
+        vim.api.nvim_feedkeys(vim.keycode("iHellx<BS>o<CR>"), "mtx", false)
+        assert.same(0, global_mapping_count)
+        assert.same("Hello", codex_requests[1].question)
+    end)
+
+    it("closes a question prompt with Escape from Insert mode", function()
+        local global_mapping_count = 0
+        vim.keymap.set("i", "<Esc>", function()
+            global_mapping_count = global_mapping_count + 1
+        end)
+
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        local prompt_window = vim.api.nvim_get_current_win()
+
+        vim.api.nvim_feedkeys(vim.keycode("i<Esc>"), "mtx", false)
+        assert.same(0, global_mapping_count)
+        assert.is_false(vim.api.nvim_win_is_valid(prompt_window))
     end)
 
     it("blocks global Control-O mappings inside the response dialog", function()
