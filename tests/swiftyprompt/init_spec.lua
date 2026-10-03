@@ -470,11 +470,11 @@ describe("SwiftPrompt interaction UI", function()
 
         local response_window = vim.api.nvim_get_current_win()
         local response_buffer = vim.api.nvim_win_get_buf(response_window)
-        assert.equals("markdown", vim.bo[response_buffer].filetype)
+        assert.equals("swiftyprompt_markdown", vim.bo[response_buffer].filetype)
         assert.is_false(vim.bo[response_buffer].modifiable)
         assert.is_true(vim.bo[response_buffer].readonly)
         assert.is_false(vim.bo[response_buffer].modified)
-        assert.same(3, vim.wo[response_window].conceallevel)
+        assert.same(2, vim.wo[response_window].conceallevel)
         assert.same("nvic", vim.wo[response_window].concealcursor)
     end)
 
@@ -485,15 +485,12 @@ describe("SwiftPrompt interaction UI", function()
 
         local response_window = vim.api.nvim_get_current_win()
         local response_buffer = vim.api.nvim_win_get_buf(response_window)
-        local namespace = vim.api.nvim_create_namespace("swiftyprompt-response-markdown")
-        local delimiter_marks = vim.api.nvim_buf_get_extmarks(response_buffer, namespace, 0, -1, { details = true })
-
-        local delimiter_columns = {}
-        for _, delimiter_mark in ipairs(delimiter_marks) do
-            assert.same("", delimiter_mark[4].conceal)
-            table.insert(delimiter_columns, delimiter_mark[3])
-        end
-        assert.same({ 0, 6, 12, 18, 25, 32 }, delimiter_columns)
+        local parser = vim.treesitter.get_parser(response_buffer, "markdown")
+        parser:parse(true)
+        local captures = vim.treesitter.get_captures_at_pos(response_buffer, 0, 0)
+        assert.is_true(vim.iter(captures):any(function(capture)
+            return capture.capture == "conceal"
+        end))
 
         for key, wrapped_key in pairs({ j = "gj", k = "gk", ["0"] = "g0", ["^"] = "g^", ["$"] = "g$" }) do
             assert.same(wrapped_key, vim.fn.maparg(key, "n", false, true).rhs)
