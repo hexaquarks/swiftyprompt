@@ -455,8 +455,7 @@ local function start_conversation(source_window, anchor_line, anchor_column, sel
         thread_id = thread_ids_by_conversation_key[key],
         context_label = context_label,
         context_subject = context_subject,
-        display_context = vim.api.nvim_buf_get_name(source_buffer) ~= ""
-            and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(source_buffer), ":t") or context_subject,
+        display_context = context_subject,
     }
 
     open_question_prompt(conversation, 1)

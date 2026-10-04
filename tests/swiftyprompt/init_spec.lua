@@ -131,11 +131,14 @@ describe("SwiftPrompt interaction UI", function()
         end
     end)
 
-    local function open_selection(lines, start_position, cursor_position, mode)
+    local function open_selection(lines, start_position, cursor_position, mode, filename)
         local source_window = vim.api.nvim_get_current_win()
         local source_buffer = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_win_set_buf(source_window, source_buffer)
         vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, lines)
+        if filename then
+            vim.api.nvim_buf_set_name(source_buffer, filename)
+        end
         vim.fn.getpos = function(mark)
             assert.same("v", mark)
             return { 0, start_position[1], start_position[2], 0 }
@@ -209,6 +212,18 @@ describe("SwiftPrompt interaction UI", function()
         assert.same(opened_window_configs[1].title, opened_window_configs[2].title)
     end)
 
+    it("keeps selection context in named files through responses and follow-ups", function()
+        open_selection({ "one", "two" }, { 1, 1 }, { 2, 2 }, "V", "/tmp/selection-context.lua")
+        assert.same("selected code", opened_window_configs[1].title[3][1])
+        submit_latest_prompt("Explain this")
+        assert.same("selected code", opened_window_configs[2].title[3][1])
+        vim.cmd("normal f")
+        assert.same("selected code", opened_window_configs[3].title[3][1])
+        submit_latest_prompt("Explain further")
+        local response_frame = vim.api.nvim_win_get_config(0).win
+        assert.same("selected code", vim.api.nvim_win_get_config(response_frame).title[3][1])
+    end)
+
     it("places the follow-up input directly below the visible response", function()
         open_selection({ "one", "two", "three" }, { 1, 1 }, { 3, 2 })
         submit_latest_prompt("Explain this")
@@ -261,6 +276,7 @@ describe("SwiftPrompt interaction UI", function()
         local source_window = vim.api.nvim_get_current_win()
         local source_buffer = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_win_set_buf(source_window, source_buffer)
+        vim.api.nvim_buf_set_name(source_buffer, "/tmp/symbol-context.lua")
         vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, {
             "local function greet()",
             "  return 'hello'",
