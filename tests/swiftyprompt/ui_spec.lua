@@ -141,4 +141,21 @@ describe("SwiftyPrompt panel chrome", function()
         end)
         assert.same({}, vim.api.nvim_get_autocmds({ id = panel.layout_autocmd }))
     end)
+
+    it("restores changed widths when several layout events arrive together", function()
+        open_panel("response", "Question")
+        vim.api.nvim_win_set_width(panel.frame_window, 40)
+        vim.api.nvim_win_set_width(panel.body_window, 38)
+        local response_buffer = vim.api.nvim_win_get_buf(panel.body_window)
+        vim.api.nvim_exec_autocmds("CursorMoved", { buffer = response_buffer })
+        vim.api.nvim_exec_autocmds("CursorMoved", { buffer = response_buffer })
+
+        assert.is_true(vim.wait(200, function()
+            return vim.api.nvim_win_get_width(panel.frame_window) == 60
+                and vim.api.nvim_win_get_width(panel.body_window) == 58
+        end))
+        assert.same(7, vim.api.nvim_win_get_height(panel.frame_window))
+        assert.same(3, vim.api.nvim_win_get_height(panel.body_window))
+        assert.same("You · Question", chrome_at(0))
+    end)
 end)

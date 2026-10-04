@@ -8,4 +8,14 @@ describe("SwiftPrompt plugin entry point", function()
             vim.cmd("SwiftPromptPop")
         end)
     end)
+
+    it("does not register its command twice when sourced again", function()
+        vim.g.loaded_swiftyprompt = nil
+        vim.cmd("runtime plugin/swiftyprompt.lua")
+        local command = vim.api.nvim_get_commands({}).SwiftPromptPop
+        assert.has_no.errors(function()
+            vim.cmd("runtime plugin/swiftyprompt.lua")
+        end)
+        assert.same(command, vim.api.nvim_get_commands({}).SwiftPromptPop)
+    end)
 end)

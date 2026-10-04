@@ -478,6 +478,71 @@ describe("SwiftPrompt interaction UI", function()
         assert.same("◜  Codex is thinking", swiftyprompt.thinking_status_text(7))
     end)
 
+    for _, provider in ipairs({ "codex", "claude" }) do
+        it("displays " .. provider .. " errors and allows retrying", function()
+            config.setup({ connector = provider })
+            local connector = provider == "codex" and codex or claude
+            local attempts = 0
+            connector.ask = function(_, _, _, _, callbacks)
+                attempts = attempts + 1
+                if attempts == 1 then
+                    callbacks.on_complete(nil, "Provider unavailable")
+                else
+                    callbacks.on_complete("Recovered answer", nil, "recovered-session")
+                end
+                return {}
+            end
+            open_selection({ "one" }, { 1, 1 }, { 1, 2 })
+            submit_latest_prompt("Explain this")
+            local response_buffer = vim.api.nvim_get_current_buf()
+            assert.same({ "Provider unavailable" }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+            vim.wait(150)
+            assert.same({ "Provider unavailable" }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+            vim.api.nvim_feedkeys("f", "mtx", false)
+            submit_latest_prompt("Retry")
+            assert.same({ "Recovered answer" }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+            assert.same(2, attempts)
+        end)
+    end
+
+    it("shows an unknown connector error without making a request", function()
+        config.setup({ connector = "unsupported" })
+        open_selection({ "one" }, { 1, 1 }, { 1, 2 })
+        submit_latest_prompt("Explain this")
+        assert.same({ "Unknown connector: unsupported" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+        assert.same({}, codex_requests)
+    end)
+
+    it("keeps follow-up input closed while a request is pending", function()
+        local callbacks
+        codex.ask = function(_, _, _, _, request_callbacks)
+            callbacks = request_callbacks
+            return {}
+        end
+        open_selection({ "one" }, { 1, 1 }, { 1, 2 })
+        submit_latest_prompt("Explain this")
+        local response_window = vim.api.nvim_get_current_win()
+        local window_count = #vim.api.nvim_list_wins()
+        vim.api.nvim_feedkeys("f", "mtx", false)
+        assert.same(response_window, vim.api.nvim_get_current_win())
+        assert.same(window_count, #vim.api.nvim_list_wins())
+        callbacks.on_complete("Done", nil, "thread-1")
+    end)
+
+    for _, response in ipairs({ {}, { { result = {} } }, { { error = { message = "LSP unavailable" } } } }) do
+        it("warns without opening a prompt when LSP supplies no symbol", function()
+            vim.lsp.buf_request_sync = function()
+                return response
+            end
+            local window_count = #vim.api.nvim_list_wins()
+            swiftyprompt.ask_about_current_symbol()
+            assert.same(window_count, #vim.api.nvim_list_wins())
+            assert.same({ { message = "SwiftPrompt: no LSP symbol found at the cursor",
+                level = vim.log.levels.WARN } }, notifications)
+            assert.same({}, codex_requests)
+        end)
+    end
+
     it("uses Claude status, model labels, streaming, and cancellation", function()
         swiftyprompt.setup({ connector = "claude", connectors = { claude = { model = "haiku" } } })
         local callbacks

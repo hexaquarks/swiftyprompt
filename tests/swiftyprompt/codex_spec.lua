@@ -21,16 +21,38 @@ describe("Codex connector", function()
     local stopped_jobs
     local stopped_timers
 
+    local function emit(message)
+        callbacks.on_stdout(nil, { vim.json.encode(message), "" })
+    end
+
     local function sent_request(index)
         return vim.json.decode(sent_messages[index])
     end
 
     local function respond(request_index, result)
-        callbacks.on_stdout(nil, { vim.json.encode({
+        emit({
             jsonrpc = "2.0",
             id = sent_request(request_index).id,
             result = result,
-        }), "" })
+        })
+    end
+
+    local function reject(request_index, message)
+        emit({ id = sent_request(request_index).id, error = { message = message } })
+    end
+
+    local function complete_turn(turn_id, status, error_message)
+        emit({
+            method = "turn/completed",
+            params = {
+                turn = {
+                    id = turn_id,
+                    status = status,
+                    error = error_message and { message = error_message },
+                    items = { { type = "agentMessage", text = "Answer" } },
+                },
+            },
+        })
     end
 
     before_each(function()
@@ -302,5 +324,197 @@ describe("Codex connector", function()
         assert.is_nil(callbacks.on_stdout)
         assert.is_nil(answer)
         assert.same("Set SWIFTPROMPT_TEST_API_KEY before starting Neovim.", error_message)
+    end)
+
+    it("reports startup failure and can start a replacement server", function()
+        vim.fn.jobstart = function()
+            return -1
+        end
+        local failure
+        codex.ask(options, "Why?", "code", nil, function(_, message)
+            failure = message
+        end)
+        assert.same("Could not start the Codex app server.", failure)
+        assert.same({}, sent_messages)
+
+        vim.fn.jobstart = function(_, job_callbacks)
+            callbacks = job_callbacks
+            return 43
+        end
+        codex.ask(options, "Retry", "code", nil, function() end)
+        assert.same("initialize", sent_request(1).method)
+    end)
+
+    for _, stage in ipairs({ "thread", "resume", "turn" }) do
+        for _, cancelled in ipairs({ false, true }) do
+            it("handles " .. stage .. " errors" .. (cancelled and " after cancellation" or ""), function()
+                local failures = {}
+                local request = codex.ask(options, "Why?", "code",
+                    stage == "resume" and "saved-thread" or nil, function(_, failure)
+                        table.insert(failures, failure)
+                    end)
+                respond(1, {})
+                local request_index = 3
+                if stage == "turn" then
+                    respond(3, { thread = { id = "thread-1" } })
+                    request_index = 4
+                end
+                if cancelled then
+                    codex.cancel(request)
+                end
+                reject(request_index, stage .. " unavailable")
+                assert.same(cancelled and {} or { stage .. " unavailable" }, failures)
+                assert.is_not_nil(callbacks.idle_timer)
+                assert.same(request_index, #sent_messages)
+            end)
+        end
+    end
+
+    for _, stage in ipairs({ "thread", "turn" }) do
+        it("reports a " .. stage .. " response without an ID", function()
+            local failure
+            codex.ask(options, "Why?", "code", nil, function(_, message)
+                failure = message
+            end)
+            respond(1, {})
+            local index = 3
+            if stage == "turn" then
+                respond(3, { thread = { id = "thread-1" } })
+                index = 4
+            end
+            respond(index, { [stage] = {} })
+            local expected = stage == "thread" and "Codex app server did not create a thread."
+                or "Codex app server did not start a turn."
+            assert.same(expected, failure)
+            assert.same(index, #sent_messages)
+            assert.is_not_nil(callbacks.idle_timer)
+        end)
+    end
+
+    it("reports failed turns and falls back when the server supplies no error", function()
+        local failures = {}
+        local function on_complete(_, failure)
+            table.insert(failures, failure)
+        end
+        codex.ask(options, "First", "code", nil, on_complete)
+        respond(1, {})
+        respond(3, { thread = { id = "thread-1" } })
+        respond(4, { turn = { id = "turn-1" } })
+        complete_turn("turn-1", "failed", "Model unavailable")
+        codex.ask(options, "Retry", "code", "thread-1", on_complete)
+        respond(5, { turn = { id = "turn-2" } })
+        complete_turn("turn-2", "failed")
+        assert.same({ "Model unavailable", "Codex did not complete the request." }, failures)
+    end)
+
+    for _, stage in ipairs({ "initialization", "thread", "resume", "turn", "active turn" }) do
+        it("fails pending questions when the server crashes during " .. stage, function()
+            local failures = {}
+            codex.ask(options, "Why?", "code", stage == "resume" and "saved-thread" or nil, function(_, failure)
+                table.insert(failures, failure)
+            end)
+            if stage ~= "initialization" then
+                respond(1, {})
+            end
+            if stage == "turn" or stage == "active turn" then
+                respond(3, { thread = { id = "thread-1" } })
+            end
+            if stage == "active turn" then
+                respond(4, { turn = { id = "turn-1" } })
+            end
+            callbacks.on_stderr(42, { "Server crashed", "" })
+            callbacks.on_exit(42, 1)
+            assert.same({ "Server crashed\n" }, failures)
+            callbacks.on_exit(42, 1)
+            assert.same(1, #failures)
+        end)
+    end
+
+    it("uses a fallback error for a crash without stderr", function()
+        local failure
+        codex.ask(options, "Why?", "code", nil, function(_, message)
+            failure = message
+        end)
+        callbacks.on_exit(42, 1)
+        assert.same("Codex app server stopped unexpectedly.", failure)
+    end)
+
+    it("ignores the exit of an old server after a replacement starts", function()
+        codex.ask(options, "First", "code", nil, function() end)
+        local old_callbacks = callbacks
+        codex.shutdown()
+        vim.fn.jobstart = function(_, job_callbacks)
+            callbacks = job_callbacks
+            return 43
+        end
+        local answer
+        codex.ask(options, "Retry", "code", nil, function(response)
+            answer = response
+        end)
+        old_callbacks.on_exit(42, 1)
+        respond(2, {})
+        respond(4, { thread = { id = "thread-2" } })
+        respond(5, { turn = { id = "turn-2" } })
+        complete_turn("turn-2", "completed")
+        assert.same("Answer", answer)
+    end)
+
+    it("queues concurrent questions until initialization and stays alive while one is active", function()
+        local answers = {}
+        local function on_complete(response)
+            table.insert(answers, response)
+        end
+        codex.ask(options, "First", "code", nil, on_complete)
+        codex.ask(options, "Second", "code", nil, on_complete)
+        assert.same(1, #sent_messages)
+        respond(1, {})
+        respond(3, { thread = { id = "thread-1" } })
+        respond(4, { thread = { id = "thread-2" } })
+        respond(5, { turn = { id = "turn-1" } })
+        respond(6, { turn = { id = "turn-2" } })
+        complete_turn("turn-1", "completed")
+        assert.is_nil(callbacks.idle_timer)
+        complete_turn("turn-2", "completed")
+        assert.same({ "Answer", "Answer" }, answers)
+        assert.is_not_nil(callbacks.idle_timer)
+    end)
+
+    it("cancels resumed questions before a turn starts", function()
+        local completed = false
+        local request = codex.ask(options, "Follow-up", "code", "saved-thread", function()
+            completed = true
+        end)
+        respond(1, {})
+        codex.cancel(request)
+        codex.cancel(request)
+        codex.cancel(nil)
+        respond(3, {})
+        assert.same(3, #sent_messages)
+        assert.is_false(completed)
+    end)
+
+    it("fails each concurrent question once on a crash and skips cancelled questions", function()
+        local failures = {}
+        local function ask(label)
+            return codex.ask(options, label, "code", nil, function(_, failure)
+                table.insert(failures, { question = label, error = failure })
+            end)
+        end
+        ask("active")
+        respond(1, {})
+        respond(3, { thread = { id = "thread-1" } })
+        respond(4, { turn = { id = "turn-1" } })
+        ask("pending")
+        local cancelled = ask("cancelled")
+        codex.cancel(cancelled)
+
+        callbacks.on_exit(42, 1)
+        table.sort(failures, function(first, second)
+            return first.question < second.question
+        end)
+        assert.same({
+            { question = "active", error = "Codex app server stopped unexpectedly." },
+            { question = "pending", error = "Codex app server stopped unexpectedly." },
+        }, failures)
     end)
 end)

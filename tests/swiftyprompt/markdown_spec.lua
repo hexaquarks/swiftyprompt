@@ -4,11 +4,13 @@ describe("SwiftPrompt Markdown rendering", function()
     local buffer_id
     local window_id
     local original_start
+    local original_language_add
     local original_notify
     local original_require
 
     before_each(function()
         original_start = vim.treesitter.start
+        original_language_add = vim.treesitter.language.add
         original_notify = vim.notify
         original_require = require
         buffer_id = vim.api.nvim_create_buf(false, true)
@@ -26,6 +28,7 @@ describe("SwiftPrompt Markdown rendering", function()
 
     after_each(function()
         vim.treesitter.start = original_start
+        vim.treesitter.language.add = original_language_add
         vim.notify = original_notify
         _G.require = original_require
         if vim.api.nvim_win_is_valid(window_id) then
@@ -153,6 +156,30 @@ describe("SwiftPrompt Markdown rendering", function()
         assert.is_false(is_concealed(13)) -- another literal underscore
         assert.is_true(is_concealed(19)) -- closing backtick
     end)
+
+    for _, missing_language in ipairs({ "markdown", "markdown_inline" }) do
+        it("preserves plain text when " .. missing_language .. " cannot be loaded", function()
+            vim.api.nvim_buf_set_lines(buffer_id, 0, -1, false, { "Readable response" })
+            vim.treesitter.language.add = function(language)
+                return language ~= missing_language
+            end
+            local parser_started = false
+            vim.treesitter.start = function()
+                parser_started = true
+            end
+            local warnings = {}
+            vim.notify = function(message)
+                table.insert(warnings, message)
+            end
+
+            markdown.render(buffer_id, window_id)
+            markdown.render(buffer_id, window_id)
+
+            assert.is_false(parser_started)
+            assert.same({ "SwiftPrompt: install the markdown and markdown_inline Tree-sitter parsers" }, warnings)
+            assert.same({ "Readable response" }, vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false))
+        end)
+    end
 
     it("warns once and preserves the response when the renderer is unavailable", function()
         vim.api.nvim_buf_set_lines(buffer_id, 0, -1, false, { "Readable response" })

@@ -12,6 +12,7 @@ local state = {
     next_request_id = 0,
     requests = {},
     queued_questions = {},
+    pending_questions = {},
     active_thread_ids = {},
     turns = {},
     stdout_remainder = "",
@@ -32,6 +33,7 @@ local function reset_state()
     state.idle_timer = nil
     state.requests = {}
     state.queued_questions = {}
+    state.pending_questions = {}
     state.active_thread_ids = {}
     state.turns = {}
     state.stdout_remainder = ""
@@ -46,19 +48,16 @@ local function stop_idle_timer()
 end
 
 local function fail_pending(message)
-    for _, question in ipairs(state.queued_questions) do
+    local pending_questions = state.pending_questions
+    state.pending_questions = {}
+    state.queued_questions = {}
+    state.turns = {}
+
+    for question in pairs(pending_questions) do
         if not question.cancelled then
             question.callbacks.on_complete(nil, message)
         end
     end
-    state.queued_questions = {}
-
-    for _, turn in pairs(state.turns) do
-        if not turn.cancelled then
-            turn.callbacks.on_complete(nil, message)
-        end
-    end
-    state.turns = {}
 end
 
 local function stop_server()
@@ -346,12 +345,21 @@ function M.ask(connector_options, question, selected_code, thread_id, callbacks)
     end
 
     local request = {
-        callbacks = callbacks,
         options = connector_options,
         prompt = prompt.build(question, selected_code, thread_id == nil),
         response = "",
         thread_id = thread_id,
     }
+    -- Track the question across thread/turn RPCs as well as active turns, so a
+    -- server crash always completes it instead of leaving the UI waiting.
+    request.callbacks = {
+        on_update = callbacks.on_update,
+        on_complete = function(...)
+            state.pending_questions[request] = nil
+            callbacks.on_complete(...)
+        end,
+    }
+    state.pending_questions[request] = true
 
     stop_idle_timer()
     table.insert(state.queued_questions, request)
@@ -371,6 +379,7 @@ function M.cancel(request)
     end
 
     request.cancelled = true
+    state.pending_questions[request] = nil
     if not request.turn_id or not request.thread_id or not state.job_id then
         return
     end
