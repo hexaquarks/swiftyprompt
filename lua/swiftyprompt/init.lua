@@ -5,26 +5,12 @@ local connectors = {
     codex = require("swiftyprompt.connectors.codex"),
 }
 
-local RESPONSE_WINDOW_WIDTH = 60
-local MAX_RESPONSE_WINDOW_HEIGHT = 12
-local QUESTION_WINDOW_HEIGHT = 3
+local ui = require("swiftyprompt.ui")
 local markdown = require("swiftyprompt.markdown")
 local thread_ids_by_conversation_key = {}
 local THINKING_FRAMES = { "◜", "◠", "◝", "◞", "◡", "◟" }
 local THINKING_FRAME_INTERVAL_MS = 120
-local PROMPT_TITLE_MAX_WIDTH = RESPONSE_WINDOW_WIDTH - 4
-local PROMPT_TITLE_PREFIX = "Ask "
-local PROMPT_TITLE_CONNECTOR = " about "
-local SYMBOL_TITLE_HIGHLIGHT = "SwiftypromptSymbol"
-local FILE_TITLE_HIGHLIGHT = "SwiftypromptFile"
-local CONTEXT_TITLE_HIGHLIGHTS = {
-    Symbol = SYMBOL_TITLE_HIGHLIGHT,
-    File = FILE_TITLE_HIGHLIGHT,
-}
 local stop_thinking_animation
-
-vim.api.nvim_set_hl(0, SYMBOL_TITLE_HIGHLIGHT, { link = "Identifier" })
-vim.api.nvim_set_hl(0, FILE_TITLE_HIGHLIGHT, { link = "Directory" })
 
 local function close_window_if_valid(window_id)
     if window_id and vim.api.nvim_win_is_valid(window_id) then
@@ -38,10 +24,14 @@ local function close_conversation_windows(conversation)
     end
     conversation.closed = true
     stop_thinking_animation(conversation)
+    ui.detach(conversation.question_panel)
+    ui.detach(conversation.response_panel)
 
-    if conversation.window_close_autocmd then
-        vim.api.nvim_del_autocmd(conversation.window_close_autocmd)
-        conversation.window_close_autocmd = nil
+    for _, field in ipairs({ "window_close_autocmd", "question_close_autocmd", "resize_autocmd" }) do
+        if conversation[field] then
+            vim.api.nvim_del_autocmd(conversation[field])
+            conversation[field] = nil
+        end
     end
 
     if conversation.is_waiting then
@@ -55,6 +45,8 @@ local function close_conversation_windows(conversation)
 
     close_window_if_valid(conversation.question_window)
     close_window_if_valid(conversation.response_window)
+    close_window_if_valid(conversation.question_frame_window)
+    close_window_if_valid(conversation.response_frame_window)
 end
 
 function M.thinking_status_text(frame_index)
@@ -68,62 +60,32 @@ function M.split_response_lines(response_text)
     return vim.split(normalized_response, "\n", { plain = true, trimempty = false })
 end
 
-local function truncate_text(text, max_width)
-    if vim.fn.strdisplaywidth(text) <= max_width then
-        return text
-    end
-
-    local ellipsis = "…"
-    local available_width = max_width - vim.fn.strdisplaywidth(ellipsis)
-    local truncated_text = ""
-    local character_index = 0
-
-    while true do
-        local character = vim.fn.strcharpart(text, character_index, 1)
-        if character == "" then
-            break
-        end
-
-        local next_width = vim.fn.strdisplaywidth(truncated_text .. character)
-        if next_width > available_width then
-            break
-        end
-
-        truncated_text = truncated_text .. character
-        character_index = character_index + 1
-    end
-
-    return truncated_text .. ellipsis
+local function model_name(conversation)
+    return (conversation.connector_options or {}).model or conversation.connector_name
 end
 
-local function prompt_title(conversation)
-    local agent_name = truncate_text(conversation.agent_name, 20)
-    local title_prefix = PROMPT_TITLE_PREFIX .. agent_name .. PROMPT_TITLE_CONNECTOR
-    local subject_width = PROMPT_TITLE_MAX_WIDTH
-        - vim.fn.strdisplaywidth(title_prefix)
-    local subject = truncate_text(conversation.context_subject, math.max(subject_width, 1))
-
-    local subject_highlight = CONTEXT_TITLE_HIGHLIGHTS[conversation.context_label]
-
-    if subject_highlight then
-        return {
-            { " " .. title_prefix, "FloatTitle" },
-            { subject, subject_highlight },
-            { " ", "FloatTitle" },
-        }
-    end
-
-    return " " .. title_prefix .. subject .. " "
+local function panel_options(conversation, kind, height, row)
+    return {
+        kind = kind,
+        body_height = height,
+        row = row,
+        source_window = conversation.source_window,
+        anchor_line = conversation.anchor_line,
+        anchor_column = conversation.anchor_column,
+        context = conversation.display_context,
+        model = model_name(conversation),
+        question = conversation.question,
+    }
 end
 
 local function response_display_height(response_lines)
     local display_rows = 0
     for _, line in ipairs(response_lines) do
         local line_width = vim.fn.strdisplaywidth(line)
-        display_rows = display_rows + math.max(math.ceil(line_width / RESPONSE_WINDOW_WIDTH), 1)
+        display_rows = display_rows + math.max(math.ceil(line_width / ui.body_width), 1)
     end
 
-    return math.min(math.max(display_rows, 1), MAX_RESPONSE_WINDOW_HEIGHT)
+    return math.min(math.max(display_rows, 1), ui.max_response_body_height())
 end
 
 local function set_close_keymaps(buffer_id, conversation)
@@ -134,13 +96,13 @@ local function set_close_keymaps(buffer_id, conversation)
     for _, close_key in ipairs({ "q", "<Esc>" }) do
         vim.keymap.set("n", close_key, close_conversation, {
             buffer = buffer_id,
-            desc = "Close SwiftPrompt",
+            desc = "Close SwiftyPrompt",
         })
     end
 
     vim.keymap.set("i", "<Esc>", close_conversation, {
         buffer = buffer_id,
-        desc = "Close SwiftPrompt",
+        desc = "Close SwiftyPrompt",
     })
 end
 
@@ -182,32 +144,7 @@ local function configure_response_display(buffer_id, window_id)
     end)
 end
 
-local function response_window_config(conversation)
-    local connector_options = config.values.connectors[config.values.connector] or {}
-    local model_name = connector_options.model or config.values.connector
-
-    return {
-        relative = "win",
-        win = conversation.source_window,
-        bufpos = { conversation.anchor_line, conversation.anchor_column },
-        anchor = "NW",
-        width = RESPONSE_WINDOW_WIDTH,
-        height = conversation.response_window_height,
-        row = 1,
-        col = 0,
-        style = "minimal",
-        border = "rounded",
-        title = " Codex — f: follow up · q/Esc: close or stop ",
-        footer = " " .. model_name .. " ",
-        footer_pos = "right",
-    }
-end
-
-local function render_response(conversation, response_text)
-    if conversation.closed then
-        return
-    end
-
+local function response_is_detached(conversation)
     -- Forced buffer switches and suppressed autocmds can bypass the normal
     -- window protections. Never render into a detached or deleted response.
     local response_window = conversation.response_window
@@ -215,14 +152,24 @@ local function render_response(conversation, response_text)
         not vim.api.nvim_win_is_valid(response_window)
         or vim.api.nvim_win_get_buf(response_window) ~= conversation.response_buffer
     )
-    if not vim.api.nvim_win_is_valid(conversation.source_window)
+    return not vim.api.nvim_win_is_valid(conversation.source_window)
         or (conversation.response_buffer and not vim.api.nvim_buf_is_valid(conversation.response_buffer))
         or response_is_detached
-    then
+        or (conversation.response_frame_window and not vim.api.nvim_win_is_valid(conversation.response_frame_window))
+
+end
+
+local function render_response(conversation, response_text)
+    if conversation.closed then
+        return
+    end
+
+    if response_is_detached(conversation) then
         close_conversation_windows(conversation)
         return
     end
 
+    conversation.response_text = response_text
     local response_lines = M.split_response_lines(response_text)
     conversation.response_window_height = response_display_height(response_lines)
 
@@ -250,22 +197,47 @@ local function render_response(conversation, response_text)
     vim.bo[conversation.response_buffer].modifiable = false
     vim.bo[conversation.response_buffer].readonly = true
 
-    local window_config = response_window_config(conversation)
     if conversation.response_window and vim.api.nvim_win_is_valid(conversation.response_window) then
-        vim.api.nvim_win_set_config(conversation.response_window, window_config)
+        ui.update(conversation.response_panel, conversation.response_window_height, conversation.question)
         configure_response_display(conversation.response_buffer, conversation.response_window)
         return
     end
 
-    conversation.response_window = vim.api.nvim_open_win(conversation.response_buffer, true, window_config)
+    conversation.response_panel = ui.open(conversation.response_buffer,
+        panel_options(conversation, "response", conversation.response_window_height, 1))
+    conversation.response_window = conversation.response_panel.body_window
+    conversation.response_frame_window = conversation.response_panel.frame_window
+    conversation.resize_autocmd = vim.api.nvim_create_autocmd("VimResized", {
+        callback = function()
+            if conversation.closed then
+                return
+            end
+            if response_is_detached(conversation) then
+                close_conversation_windows(conversation)
+                return
+            end
+            conversation.response_window_height = response_display_height(
+                M.split_response_lines(conversation.response_text)
+            )
+            -- Resize the card without rewriting the answer or resetting its view.
+            ui.update(conversation.response_panel, conversation.response_window_height, conversation.question)
+        end,
+        desc = "Keep SwiftyPrompt response cards within the screen height budget",
+    })
     conversation.window_close_autocmd = vim.api.nvim_create_autocmd("WinClosed", {
-        pattern = { tostring(conversation.response_window), tostring(conversation.source_window) },
+        pattern = {
+            tostring(conversation.response_window),
+            tostring(conversation.response_frame_window),
+            tostring(conversation.source_window),
+        },
         once = true,
         callback = function(event)
             -- WinClosed runs before the window becomes invalid. Do not try
             -- to close the same window again while handling its closure.
             if tonumber(event.match) == conversation.response_window then
                 conversation.response_window = nil
+            elseif tonumber(event.match) == conversation.response_frame_window then
+                conversation.response_frame_window = nil
             else
                 conversation.source_window = nil
             end
@@ -278,6 +250,11 @@ local function render_response(conversation, response_text)
     vim.keymap.set("n", "f", function()
         M.open_follow_up_prompt(conversation)
     end, { buffer = conversation.response_buffer, desc = "Ask a follow-up" })
+
+    vim.keymap.set("n", "gY", function()
+        vim.fn.setreg('"', conversation.response_text)
+        vim.fn.setreg("+", conversation.response_text)
+    end, { buffer = conversation.response_buffer, desc = "Copy SwiftyPrompt response" })
 
     set_close_keymaps(conversation.response_buffer, conversation)
 end
@@ -313,9 +290,10 @@ local function start_thinking_animation(conversation)
 end
 
 local function submit_question(conversation, question)
-    local connector_name = config.values.connector
+    conversation.question = question
+    local connector_name = conversation.connector_name
     local connector = connectors[connector_name]
-    local connector_options = config.values.connectors[connector_name]
+    local connector_options = conversation.connector_options
 
     if not connector or not connector_options then
         render_response(conversation, "Unknown connector: " .. connector_name)
@@ -362,15 +340,27 @@ local function submit_question(conversation, question)
     end
 end
 
-local function open_question_prompt(conversation, row_offset, title)
+local function close_question_panel(conversation)
+    ui.detach(conversation.question_panel)
+    if conversation.question_close_autocmd then
+        vim.api.nvim_del_autocmd(conversation.question_close_autocmd)
+        conversation.question_close_autocmd = nil
+    end
     close_window_if_valid(conversation.question_window)
+    close_window_if_valid(conversation.question_frame_window)
+    conversation.question_window = nil
+    conversation.question_frame_window = nil
+end
+
+local function open_question_prompt(conversation, row_offset)
+    close_question_panel(conversation)
 
     local question_buffer = vim.api.nvim_create_buf(false, true)
     vim.bo[question_buffer].buftype = "prompt"
     -- Prompt text must never survive after its floating window closes. Otherwise
     -- Neovim keeps a modified unnamed buffer and asks to save it on exit.
     vim.bo[question_buffer].bufhidden = "wipe"
-    vim.fn.prompt_setprompt(question_buffer, "Ask: ")
+    vim.fn.prompt_setprompt(question_buffer, "")
     block_global_keymaps(question_buffer, { "n", "i" })
     for _, mode in ipairs({ "n", "i" }) do
         vim.keymap.set(mode, "<C-o>", "<Nop>", {
@@ -387,26 +377,32 @@ local function open_question_prompt(conversation, row_offset, title)
         })
     end
 
-    conversation.question_window = vim.api.nvim_open_win(question_buffer, true, {
-        relative = "win",
-        win = conversation.source_window,
-        bufpos = { conversation.anchor_line, conversation.anchor_column },
-        anchor = "NW",
-        width = RESPONSE_WINDOW_WIDTH,
-        height = QUESTION_WINDOW_HEIGHT,
-        row = row_offset,
-        col = 0,
-        style = "minimal",
-        border = "rounded",
-        title = title,
-        footer = " Enter to send ",
-        footer_pos = "right",
+    conversation.question_panel = ui.open(question_buffer,
+        panel_options(conversation, "input", ui.input_height, row_offset))
+    conversation.question_window = conversation.question_panel.body_window
+    conversation.question_frame_window = conversation.question_panel.frame_window
+    conversation.question_close_autocmd = vim.api.nvim_create_autocmd("WinClosed", {
+        pattern = {
+            tostring(conversation.question_window),
+            tostring(conversation.question_frame_window),
+            tostring(conversation.source_window),
+        },
+        once = true,
+        callback = function(event)
+            if tonumber(event.match) == conversation.question_window then
+                conversation.question_window = nil
+            elseif tonumber(event.match) == conversation.question_frame_window then
+                conversation.question_frame_window = nil
+            else
+                conversation.source_window = nil
+            end
+            close_conversation_windows(conversation)
+        end,
+        desc = "Dismiss SwiftyPrompt when its input or source window closes",
     })
-    vim.wo[conversation.question_window].wrap = true
 
     vim.fn.prompt_setcallback(question_buffer, function(question)
-        close_window_if_valid(conversation.question_window)
-        conversation.question_window = nil
+        close_question_panel(conversation)
 
         if question ~= "" then
             submit_question(conversation, question)
@@ -418,15 +414,16 @@ local function open_question_prompt(conversation, row_offset, title)
 end
 
 function M.open_follow_up_prompt(conversation)
-    if not conversation.response_window or not vim.api.nvim_win_is_valid(conversation.response_window) then
+    if conversation.is_waiting or not conversation.response_window
+        or not vim.api.nvim_win_is_valid(conversation.response_window)
+    then
         return
     end
 
     -- Keep the editor directly below the visible response card.
     open_question_prompt(
         conversation,
-        conversation.response_window_height + 3,
-        prompt_title(conversation)
+        conversation.response_window_height + ui.response_offset + 5
     )
 end
 
@@ -444,6 +441,8 @@ end
 
 local function start_conversation(source_window, anchor_line, anchor_column, selected_code, scope, context_label, context_subject)
     local source_buffer = vim.api.nvim_win_get_buf(source_window)
+    local connector_name = config.values.connector
+    local connector_options = vim.deepcopy(config.values.connectors[connector_name])
     local key = conversation_key(source_buffer, scope, selected_code)
     local conversation = {
         source_window = source_window,
@@ -451,13 +450,15 @@ local function start_conversation(source_window, anchor_line, anchor_column, sel
         anchor_column = anchor_column,
         selected_code = selected_code,
         key = key,
+        connector_name = connector_name,
+        connector_options = connector_options,
         thread_id = thread_ids_by_conversation_key[key],
         context_label = context_label,
         context_subject = context_subject,
-        agent_name = "Codex",
+        display_context = context_subject,
     }
 
-    open_question_prompt(conversation, 1, prompt_title(conversation))
+    open_question_prompt(conversation, 1)
 end
 
 function M.notify_selection_required()

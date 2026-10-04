@@ -18,6 +18,8 @@ describe("SwiftPrompt interaction UI", function()
     local original_insert_backspace
     local original_insert_escape
     local original_navigation_mappings
+    local original_setreg
+    local original_lines
     local opened_window_configs
     local question_prompt_callbacks
     local codex_requests
@@ -38,6 +40,8 @@ describe("SwiftPrompt interaction UI", function()
         original_getpos = vim.fn.getpos
         original_notify = vim.notify
         original_selection = vim.o.selection
+        original_setreg = vim.fn.setreg
+        original_lines = vim.o.lines
         original_normal_control_o = vim.fn.maparg("<C-o>", "n", false, true)
         original_insert_control_o = vim.fn.maparg("<C-o>", "i", false, true)
         original_normal_f9 = vim.fn.maparg("<F9>", "n", false, true)
@@ -52,7 +56,9 @@ describe("SwiftPrompt interaction UI", function()
         notifications = {}
 
         vim.api.nvim_open_win = function(buffer_id, enter_window, window_config)
-            table.insert(opened_window_configs, vim.deepcopy(window_config))
+            if window_config.border ~= "none" then
+                table.insert(opened_window_configs, vim.deepcopy(window_config))
+            end
             return original_open_win(buffer_id, enter_window, window_config)
         end
         vim.fn.prompt_setcallback = function(prompt_buffer, submit_callback)
@@ -85,6 +91,8 @@ describe("SwiftPrompt interaction UI", function()
         vim.fn.getpos = original_getpos
         vim.notify = original_notify
         vim.o.selection = original_selection
+        vim.fn.setreg = original_setreg
+        vim.o.lines = original_lines
         for key, mapping in pairs(original_navigation_mappings) do
             pcall(vim.keymap.del, "n", key)
             if next(mapping) then
@@ -117,18 +125,20 @@ describe("SwiftPrompt interaction UI", function()
         end
 
         for _, window in ipairs(vim.api.nvim_list_wins()) do
-            local config = vim.api.nvim_win_get_config(window)
-            if config.relative ~= "" and vim.api.nvim_win_is_valid(window) then
+            if vim.api.nvim_win_is_valid(window) and vim.api.nvim_win_get_config(window).relative ~= "" then
                 vim.api.nvim_win_close(window, true)
             end
         end
     end)
 
-    local function open_selection(lines, start_position, cursor_position, mode)
+    local function open_selection(lines, start_position, cursor_position, mode, filename)
         local source_window = vim.api.nvim_get_current_win()
         local source_buffer = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_win_set_buf(source_window, source_buffer)
         vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, lines)
+        if filename then
+            vim.api.nvim_buf_set_name(source_buffer, filename)
+        end
         vim.fn.getpos = function(mark)
             assert.same("v", mark)
             return { 0, start_position[1], start_position[2], 0 }
@@ -143,9 +153,13 @@ describe("SwiftPrompt interaction UI", function()
     end
 
     local function submit_latest_prompt(question)
-        local prompt_buffer, submit_callback = next(question_prompt_callbacks)
-        assert.is_not_nil(prompt_buffer)
-        submit_callback(question)
+        for prompt_buffer, submit_callback in pairs(question_prompt_callbacks) do
+            if vim.api.nvim_buf_is_valid(prompt_buffer) then
+                submit_callback(question)
+                return
+            end
+        end
+        error("No open question prompt")
     end
 
     it("splits empty, single-line, and multi-line responses", function()
@@ -177,22 +191,37 @@ describe("SwiftPrompt interaction UI", function()
             bufpos = { 1, 3 },
             anchor = "NW",
             width = 60,
-            height = 3,
+            height = 5,
             row = 1,
             col = 0,
             style = "minimal",
             border = "rounded",
-            title = " Ask Codex about selected code ",
-            footer = " Enter to send ",
-            footer_pos = "right",
+            title = {
+                { " SwiftyPrompt ", "SwiftyPromptAccent" },
+                { "· ", "SwiftyPromptMuted" },
+                { "selected code", "SwiftyPromptContext" },
+                { " ", "SwiftyPromptNormal" },
+            },
+            focusable = false,
+            zindex = 50,
         }, opened_window_configs[1])
 
         submit_latest_prompt("Explain this")
         assert.same(table.concat({ "DEF", "ghiJKL", "mnop" }, "\n"), codex_requests[1].selected_code)
         assert.same("Explain this", codex_requests[1].question)
-        assert.same(" Codex — f: follow up · q/Esc: close or stop ", opened_window_configs[2].title)
-        assert.same(" gpt-6-luna ", opened_window_configs[2].footer)
-        assert.same("right", opened_window_configs[2].footer_pos)
+        assert.same(opened_window_configs[1].title, opened_window_configs[2].title)
+    end)
+
+    it("keeps selection context in named files through responses and follow-ups", function()
+        open_selection({ "one", "two" }, { 1, 1 }, { 2, 2 }, "V", "/tmp/selection-context.lua")
+        assert.same("selected code", opened_window_configs[1].title[3][1])
+        submit_latest_prompt("Explain this")
+        assert.same("selected code", opened_window_configs[2].title[3][1])
+        vim.cmd("normal f")
+        assert.same("selected code", opened_window_configs[3].title[3][1])
+        submit_latest_prompt("Explain further")
+        local response_frame = vim.api.nvim_win_get_config(0).win
+        assert.same("selected code", vim.api.nvim_win_get_config(response_frame).title[3][1])
     end)
 
     it("places the follow-up input directly below the visible response", function()
@@ -203,9 +232,9 @@ describe("SwiftPrompt interaction UI", function()
         -- mapping provides the same path a user takes by pressing f.
         vim.cmd("normal f")
 
-        assert.same(" Ask Codex about selected code ", opened_window_configs[3].title)
-        assert.same(6, opened_window_configs[3].row) -- three response lines + its border gap
-        assert.same(3, opened_window_configs[3].height)
+        assert.same(opened_window_configs[2].title, opened_window_configs[3].title)
+        assert.same(10, opened_window_configs[3].row) -- reply + pinned header + footer and borders
+        assert.same(5, opened_window_configs[3].height)
     end)
 
     it("labels file prompts and responses with their context", function()
@@ -217,13 +246,14 @@ describe("SwiftPrompt interaction UI", function()
 
         swiftyprompt.ask_about_current_file()
         assert.same({
-            { " Ask Codex about ", "FloatTitle" },
-            { "settings.lua", "SwiftypromptFile" },
-            { " ", "FloatTitle" },
+            { " SwiftyPrompt ", "SwiftyPromptAccent" },
+            { "· ", "SwiftyPromptMuted" },
+            { "settings.lua", "SwiftyPromptContext" },
+            { " ", "SwiftyPromptNormal" },
         }, opened_window_configs[1].title)
 
         submit_latest_prompt("Explain this")
-        assert.same(" Codex — f: follow up · q/Esc: close or stop ", opened_window_configs[2].title)
+        assert.same(opened_window_configs[1].title, opened_window_configs[2].title)
     end)
 
     it("labels unnamed file prompts as the current buffer", function()
@@ -235,9 +265,10 @@ describe("SwiftPrompt interaction UI", function()
         swiftyprompt.ask_about_current_file()
 
         assert.same({
-            { " Ask Codex about ", "FloatTitle" },
-            { "this buffer", "SwiftypromptFile" },
-            { " ", "FloatTitle" },
+            { " SwiftyPrompt ", "SwiftyPromptAccent" },
+            { "· ", "SwiftyPromptMuted" },
+            { "this buffer", "SwiftyPromptContext" },
+            { " ", "SwiftyPromptNormal" },
         }, opened_window_configs[1].title)
     end)
 
@@ -245,6 +276,7 @@ describe("SwiftPrompt interaction UI", function()
         local source_window = vim.api.nvim_get_current_win()
         local source_buffer = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_win_set_buf(source_window, source_buffer)
+        vim.api.nvim_buf_set_name(source_buffer, "/tmp/symbol-context.lua")
         vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, {
             "local function greet()",
             "  return 'hello'",
@@ -269,13 +301,14 @@ describe("SwiftPrompt interaction UI", function()
 
         swiftyprompt.ask_about_current_symbol()
         assert.same({
-            { " Ask Codex about ", "FloatTitle" },
-            { "greet", "SwiftypromptSymbol" },
-            { " ", "FloatTitle" },
+            { " SwiftyPrompt ", "SwiftyPromptAccent" },
+            { "· ", "SwiftyPromptMuted" },
+            { "greet", "SwiftyPromptContext" },
+            { " ", "SwiftyPromptNormal" },
         }, opened_window_configs[1].title)
 
         submit_latest_prompt("Explain this")
-        assert.same(" Codex — f: follow up · q/Esc: close or stop ", opened_window_configs[2].title)
+        assert.same(opened_window_configs[1].title, opened_window_configs[2].title)
     end)
 
     it("truncates long symbol names in prompt titles", function()
@@ -303,10 +336,10 @@ describe("SwiftPrompt interaction UI", function()
         swiftyprompt.ask_about_current_symbol()
 
         local title = opened_window_configs[1].title
-        local title_text = title[1][1] .. title[2][1] .. title[3][1]
-        assert.matches("Ask Codex about very_long_symbol_name", title_text)
-        assert.matches("…", title[2][1])
-        assert.same("SwiftypromptSymbol", title[2][2])
+        local title_text = title[1][1] .. title[2][1] .. title[3][1] .. title[4][1]
+        assert.matches("SwiftyPrompt · very_long_symbol_name", title_text)
+        assert.matches("%.%.%.", title[3][1])
+        assert.same("SwiftyPromptContext", title[3][2])
         assert.is_true(vim.fn.strdisplaywidth(title_text) <= 60)
     end)
 
@@ -335,9 +368,10 @@ describe("SwiftPrompt interaction UI", function()
         swiftyprompt.ask_about_current_symbol()
 
         assert.same({
-            { " Ask Codex about ", "FloatTitle" },
-            { "M.setup", "SwiftypromptSymbol" },
-            { " ", "FloatTitle" },
+            { " SwiftyPrompt ", "SwiftyPromptAccent" },
+            { "· ", "SwiftyPromptMuted" },
+            { "M.setup", "SwiftyPromptContext" },
+            { " ", "SwiftyPromptNormal" },
         }, opened_window_configs[1].title)
     end)
 
@@ -366,9 +400,10 @@ describe("SwiftPrompt interaction UI", function()
         swiftyprompt.ask_about_current_symbol()
 
         assert.same({
-            { " Ask Codex about ", "FloatTitle" },
-            { "this symbol", "SwiftypromptSymbol" },
-            { " ", "FloatTitle" },
+            { " SwiftyPrompt ", "SwiftyPromptAccent" },
+            { "· ", "SwiftyPromptMuted" },
+            { "this symbol", "SwiftyPromptContext" },
+            { " ", "SwiftyPromptNormal" },
         }, opened_window_configs[1].title)
     end)
 
@@ -471,9 +506,44 @@ describe("SwiftPrompt interaction UI", function()
 
         local response_window = vim.api.nvim_get_current_win()
         local response_config = vim.api.nvim_win_get_config(response_window)
-        assert.same(60, response_config.width)
+        assert.same(58, response_config.width)
         assert.same(2, response_config.height)
         assert.is_true(vim.wo[response_window].wrap)
+    end)
+
+    for _, screen_height in ipairs({ 24, 40, 80 }) do
+        it("limits the entire response card on a " .. screen_height .. "-row screen", function()
+            vim.o.lines = screen_height
+            codex_response = string.rep("Response line\n", 100)
+            open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+            submit_latest_prompt("Explain this")
+            local frame_window = vim.api.nvim_win_get_config(0).win
+            local card_height = vim.api.nvim_win_get_height(frame_window) + 2
+            assert.is_true(card_height <= 22)
+            assert.is_true(card_height <= math.floor((screen_height - vim.o.cmdheight) * 0.6))
+            vim.api.nvim_feedkeys("G", "mtx", false)
+            assert.same(101, vim.api.nvim_win_get_cursor(0)[1])
+        end)
+    end
+
+    it("shrinks an open response card when the terminal gets smaller", function()
+        vim.o.lines = 80
+        codex_response = string.rep("Response line\n", 100)
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+        local response_window = vim.api.nvim_get_current_win()
+        local frame_window = vim.api.nvim_win_get_config(response_window).win
+        local previous_height = vim.api.nvim_win_get_height(frame_window)
+        vim.api.nvim_win_set_cursor(response_window, { 70, 0 })
+        local changedtick = vim.api.nvim_buf_get_changedtick(0)
+        vim.o.lines = 24
+        vim.api.nvim_exec_autocmds("VimResized", {})
+        assert.is_true(vim.api.nvim_win_get_height(frame_window) < previous_height)
+        assert.is_true(vim.api.nvim_win_get_height(frame_window) + 2 <= 13)
+        assert.same(response_window, vim.api.nvim_get_current_win())
+        assert.same(101, vim.api.nvim_buf_line_count(0))
+        assert.same({ 70, 0 }, vim.api.nvim_win_get_cursor(response_window))
+        assert.same(changedtick, vim.api.nvim_buf_get_changedtick(0))
     end)
 
     it("renders responses in a read-only Markdown buffer", function()
@@ -488,6 +558,118 @@ describe("SwiftPrompt interaction UI", function()
         assert.is_false(vim.bo[response_buffer].modified)
         assert.same(2, vim.wo[response_window].conceallevel)
         assert.same("nvic", vim.wo[response_window].concealcursor)
+    end)
+
+    it("keeps the question and controls fixed while scrolling a response", function()
+        local lines = {}
+        for row = 1, 80 do
+            lines[row] = "Answer line " .. row
+        end
+        codex_response = table.concat(lines, "\n")
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("What does setup() override?")
+        local response_window = vim.api.nvim_get_current_win()
+        local frame_window = vim.api.nvim_win_get_config(response_window).win
+        local frame_buffer = vim.api.nvim_win_get_buf(frame_window)
+        local namespace = vim.api.nvim_create_namespace("swiftyprompt.ui")
+        local chrome = vim.api.nvim_buf_get_extmarks(frame_buffer, namespace, 0, -1, { details = true })
+        vim.api.nvim_feedkeys("G", "mtx", false)
+        vim.cmd("redraw")
+        assert.same(80, vim.api.nvim_win_get_cursor(response_window)[1])
+        assert.is_true(vim.fn.winsaveview().topline > 1)
+        assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(frame_window))
+        assert.same(chrome, vim.api.nvim_buf_get_extmarks(frame_buffer, namespace, 0, -1, { details = true }))
+        assert.same("You", chrome[1][4].virt_text[1][1])
+        assert.same(" · What does setup() override?", chrome[1][4].virt_text[2][1])
+        assert.same({ lines[1], lines[2] }, vim.api.nvim_buf_get_lines(0, 0, 2, false))
+    end)
+
+    it("copies the complete response with gY, including offscreen Markdown", function()
+        codex_response = "# Heading\n" .. string.rep("- **Detail**\n", 40)
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+        local copied = {}
+        vim.fn.setreg = function(register, text)
+            copied[register] = text
+        end
+        vim.api.nvim_feedkeys("GgY", "mtx", false)
+        assert.same(codex_response, copied['"'])
+        assert.same(codex_response, copied["+"])
+        assert.is_false(vim.bo.modifiable)
+    end)
+
+    it("updates the fixed question when a follow-up is submitted", function()
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("First question")
+        vim.api.nvim_feedkeys("f", "mtx", false)
+        submit_latest_prompt("Follow-up question")
+        local frame_window = vim.api.nvim_win_get_config(0).win
+        local frame_buffer = vim.api.nvim_win_get_buf(frame_window)
+        local marks = vim.api.nvim_buf_get_extmarks(frame_buffer,
+            vim.api.nvim_create_namespace("swiftyprompt.ui"), { 0, 0 }, { 0, -1 }, { details = true })
+        assert.same(" · Follow-up question", marks[1][4].virt_text[2][1])
+        assert.same("Follow-up question", codex_requests[2].question)
+    end)
+
+    it("closes both parts of a prompt when its frame is dismissed", function()
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        local body_window = vim.api.nvim_get_current_win()
+        local frame_window = vim.api.nvim_win_get_config(body_window).win
+        local body_buffer = vim.api.nvim_get_current_buf()
+        local frame_buffer = vim.api.nvim_win_get_buf(frame_window)
+        vim.api.nvim_win_close(frame_window, true)
+        assert.is_false(vim.api.nvim_win_is_valid(body_window))
+        assert.is_false(vim.api.nvim_win_is_valid(frame_window))
+        assert.is_false(vim.api.nvim_buf_is_valid(body_buffer))
+        assert.is_false(vim.api.nvim_buf_is_valid(frame_buffer))
+        assert.same({}, codex_requests)
+    end)
+
+    it("dismisses an unsubmitted prompt when its source window closes", function()
+        local source_window = open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        local body_window = vim.api.nvim_get_current_win()
+        local frame_window = vim.api.nvim_win_get_config(body_window).win
+        local body_buffer = vim.api.nvim_get_current_buf()
+        local frame_buffer = vim.api.nvim_win_get_buf(frame_window)
+        vim.api.nvim_open_win(vim.api.nvim_win_get_buf(source_window), false, {
+            split = "right", win = source_window,
+        })
+        vim.api.nvim_win_close(source_window, true)
+        assert.is_false(vim.api.nvim_win_is_valid(body_window))
+        assert.is_false(vim.api.nvim_win_is_valid(frame_window))
+        assert.is_false(vim.api.nvim_buf_is_valid(body_buffer))
+        assert.is_false(vim.api.nvim_buf_is_valid(frame_buffer))
+        assert.same({}, codex_requests)
+    end)
+
+    it("cancels a pending request when its response frame closes", function()
+        local callbacks
+        local request = {}
+        local cancellations = 0
+        codex.ask = function(_, _, _, _, request_callbacks)
+            callbacks = request_callbacks
+            return request
+        end
+        codex.cancel = function(cancelled)
+            assert.same(request, cancelled)
+            cancellations = cancellations + 1
+        end
+        open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        submit_latest_prompt("Explain this")
+        local body_window = vim.api.nvim_get_current_win()
+        local frame_window = vim.api.nvim_win_get_config(body_window).win
+        local body_buffer = vim.api.nvim_get_current_buf()
+        local frame_buffer = vim.api.nvim_win_get_buf(frame_window)
+        vim.api.nvim_win_close(frame_window, true)
+        assert.has_no.errors(function()
+            callbacks.on_update("Late update")
+            callbacks.on_complete("Late answer", nil, "thread-1")
+        end)
+        assert.same(1, cancellations)
+        assert.is_false(vim.api.nvim_win_is_valid(body_window))
+        assert.is_false(vim.api.nvim_win_is_valid(frame_window))
+        assert.is_false(vim.api.nvim_buf_is_valid(body_buffer))
+        assert.is_false(vim.api.nvim_buf_is_valid(frame_buffer))
     end)
 
     it("conceals Markdown delimiters and navigates by wrapped rows", function()
@@ -719,7 +901,7 @@ describe("SwiftPrompt interaction UI", function()
         vim.api.nvim_feedkeys("j", "mtx", false)
         local cursor = vim.api.nvim_win_get_cursor(0)
         assert.same(1, cursor[1])
-        assert.is_true(cursor[2] >= 60)
+        assert.is_true(cursor[2] >= vim.api.nvim_win_get_width(0))
         vim.api.nvim_feedkeys("k", "mtx", false)
         assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(0))
         assert.is_false(pcall(vim.cmd, "normal! x"))
