@@ -20,9 +20,13 @@ jobs:
       - name: Install Plenary
         run: git clone --depth 1 https://github.com/nvim-lua/plenary.nvim .tests/plenary.nvim
 
+      - name: Install Markdown renderer
+        run: git clone --depth 1 --branch v8.14.0 https://github.com/MeanderingProgrammer/render-markdown.nvim .tests/render-markdown.nvim
+
       - name: Run tests
         env:
           PLENARY_DIR: ${{ github.workspace }}/.tests/plenary.nvim
+          RENDER_MARKDOWN_DIR: ${{ github.workspace }}/.tests/render-markdown.nvim
         run: |
           nvim --headless --noplugin -u NONE \
             --cmd "set rtp+=$PLENARY_DIR" \
