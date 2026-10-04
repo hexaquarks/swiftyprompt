@@ -124,7 +124,7 @@ describe("SwiftPrompt Markdown rendering", function()
         end))
     end)
 
-    it("keeps responses readable when a Markdown parser is missing", function()
+    it("keeps responses readable when starting the parser throws", function()
         vim.api.nvim_buf_set_lines(buffer_id, 0, -1, false, { "Readable response" })
         vim.treesitter.start = function()
             error("parser unavailable")

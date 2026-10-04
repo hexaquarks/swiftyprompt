@@ -341,8 +341,16 @@ describe("Codex connector", function()
             callbacks = job_callbacks
             return 43
         end
-        codex.ask(options, "Retry", "code", nil, function() end)
+        local answer
+        codex.ask(options, "Retry", "code", nil, function(response)
+            answer = response
+        end)
         assert.same("initialize", sent_request(1).method)
+        respond(1, {})
+        respond(3, { thread = { id = "replacement-thread" } })
+        respond(4, { turn = { id = "replacement-turn" } })
+        complete_turn("replacement-turn", "completed")
+        assert.same("Answer", answer)
     end)
 
     for _, stage in ipairs({ "thread", "resume", "turn" }) do
@@ -427,6 +435,30 @@ describe("Codex connector", function()
             assert.same({ "Server crashed\n" }, failures)
             callbacks.on_exit(42, 1)
             assert.same(1, #failures)
+        end)
+    end
+
+    for _, status in ipairs({ "completed", "failed" }) do
+        it("does not complete a " .. status .. " question again after a later crash", function()
+            local completions = {}
+            codex.ask(options, "First", "code", nil, function(response, failure)
+                table.insert(completions, { response = response, error = failure })
+            end)
+            respond(1, {})
+            respond(3, { thread = { id = "thread-1" } })
+            respond(4, { turn = { id = "turn-1" } })
+            complete_turn("turn-1", status, status == "failed" and "Model unavailable" or nil)
+
+            local pending_failures = {}
+            codex.ask(options, "Second", "code", nil, function(_, failure)
+                table.insert(pending_failures, failure)
+            end)
+            callbacks.on_exit(42, 1)
+
+            local expected = status == "completed" and { response = "Answer" }
+                or { error = "Model unavailable" }
+            assert.same({ expected }, completions)
+            assert.same({ "Codex app server stopped unexpectedly." }, pending_failures)
         end)
     end
 
