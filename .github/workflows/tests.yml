@@ -8,12 +8,18 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NEOVIM_VERSION: "0.11.2"
+      LUA_PATH: "${{ github.workspace }}/.tests/luacov/src/?.lua;${{ github.workspace }}/.tests/luacov-cobertura/?.lua;;"
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Neovim
         run: |
-          curl --fail --location --remote-name https://github.com/neovim/neovim/releases/download/v0.11.2/nvim-linux-x86_64.tar.gz
+          curl --fail --location --remote-name "https://github.com/neovim/neovim/releases/download/v${NEOVIM_VERSION}/nvim-linux-x86_64.tar.gz"
           tar xzf nvim-linux-x86_64.tar.gz
           echo "$GITHUB_WORKSPACE/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
 
@@ -23,8 +29,14 @@ jobs:
       - name: Install Markdown renderer
         run: git clone --depth 1 --branch v8.14.0 https://github.com/MeanderingProgrammer/render-markdown.nvim .tests/render-markdown.nvim
 
+      - name: Install coverage tools
+        run: |
+          git clone --depth 1 --branch v0.17.0 https://github.com/lunarmodules/luacov .tests/luacov
+          git clone --depth 1 --branch 1.1.0 https://github.com/britzl/luacov-cobertura .tests/luacov-cobertura
+
       - name: Run tests
         env:
+          SWIFTYPROMPT_COVERAGE: "1"
           PLENARY_DIR: ${{ github.workspace }}/.tests/plenary.nvim
           RENDER_MARKDOWN_DIR: ${{ github.workspace }}/.tests/render-markdown.nvim
         run: |
@@ -32,3 +44,14 @@ jobs:
             --cmd "set rtp+=$PLENARY_DIR" \
             -c "runtime plugin/plenary.vim" \
             -c "PlenaryBustedDirectory tests/ { minimal_init = 'tests/minimal_init.lua', sequential = true }"
+
+      - name: Generate coverage report
+        run: nvim --headless --noplugin -u NONE -c "lua require('luacov.runner').load_config(); require('luacov.reporter.cobertura').report()" -c "qa!"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
+          files: coverage.xml
+          disable_search: true
+          fail_ci_if_error: true
