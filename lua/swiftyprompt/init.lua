@@ -33,15 +33,24 @@ local function close_window_if_valid(window_id)
 end
 
 local function close_conversation_windows(conversation)
+    if conversation.closed then
+        return
+    end
+    conversation.closed = true
     stop_thinking_animation(conversation)
 
+    if conversation.window_close_autocmd then
+        vim.api.nvim_del_autocmd(conversation.window_close_autocmd)
+        conversation.window_close_autocmd = nil
+    end
+
     if conversation.is_waiting then
+        conversation.is_waiting = false
         local connector = connectors[conversation.connector_name]
         if connector then
             connector.cancel(conversation.request)
         end
         conversation.request = nil
-        conversation.is_waiting = false
     end
 
     close_window_if_valid(conversation.question_window)
@@ -148,23 +157,29 @@ local function block_global_keymaps(buffer_id, modes)
 end
 
 local function configure_response_display(buffer_id, window_id)
+    vim.wo[window_id].winfixbuf = true
     vim.wo[window_id].wrap = true
     vim.wo[window_id].conceallevel = 2
     vim.wo[window_id].concealcursor = "nvic"
     markdown.render(buffer_id, window_id)
 
-    for _, motion in ipairs({
-        { key = "j", wrapped_key = "gj" },
-        { key = "k", wrapped_key = "gk" },
-        { key = "0", wrapped_key = "g0" },
-        { key = "^", wrapped_key = "g^" },
-        { key = "$", wrapped_key = "g$" },
-    }) do
-        vim.keymap.set("n", motion.key, motion.wrapped_key, {
-            buffer = buffer_id,
-            remap = false,
-        })
-    end
+    -- Wrapped motions are defaults; preserve user and filetype mappings.
+    vim.api.nvim_buf_call(buffer_id, function()
+        for _, motion in ipairs({
+            { key = "j", wrapped_key = "gj" },
+            { key = "k", wrapped_key = "gk" },
+            { key = "0", wrapped_key = "g0" },
+            { key = "^", wrapped_key = "g^" },
+            { key = "$", wrapped_key = "g$" },
+        }) do
+            if vim.fn.maparg(motion.key, "n") == "" then
+                vim.keymap.set("n", motion.key, motion.wrapped_key, {
+                    buffer = buffer_id,
+                    remap = false,
+                })
+            end
+        end
+    end)
 end
 
 local function response_window_config(conversation)
@@ -189,18 +204,41 @@ local function response_window_config(conversation)
 end
 
 local function render_response(conversation, response_text)
+    if conversation.closed then
+        return
+    end
+
+    -- Forced buffer switches and suppressed autocmds can bypass the normal
+    -- window protections. Never render into a detached or deleted response.
+    local response_window = conversation.response_window
+    local response_is_detached = response_window and (
+        not vim.api.nvim_win_is_valid(response_window)
+        or vim.api.nvim_win_get_buf(response_window) ~= conversation.response_buffer
+    )
+    if not vim.api.nvim_win_is_valid(conversation.source_window)
+        or (conversation.response_buffer and not vim.api.nvim_buf_is_valid(conversation.response_buffer))
+        or response_is_detached
+    then
+        close_conversation_windows(conversation)
+        return
+    end
+
     local response_lines = M.split_response_lines(response_text)
     conversation.response_window_height = response_display_height(response_lines)
 
     if not conversation.response_buffer then
         conversation.response_buffer = vim.api.nvim_create_buf(false, true)
+        vim.bo[conversation.response_buffer].bufhidden = "wipe"
         -- Keep Markdown highlighting, but hide document-lint warnings on AI replies.
         vim.diagnostic.enable(false, { bufnr = conversation.response_buffer })
-        block_global_keymaps(conversation.response_buffer, { "n" })
+        -- Let Neovim resolve user navigation mappings normally. The response
+        -- is protected from edits by 'modifiable' and 'readonly' below.
+        -- Jumping back can replace the response buffer in this floating window.
         vim.keymap.set("n", "<C-o>", "<Nop>", {
             buffer = conversation.response_buffer,
             nowait = true,
             remap = false,
+            desc = "Keep jumplist navigation out of the response window",
         })
     end
 
@@ -220,6 +258,21 @@ local function render_response(conversation, response_text)
     end
 
     conversation.response_window = vim.api.nvim_open_win(conversation.response_buffer, true, window_config)
+    conversation.window_close_autocmd = vim.api.nvim_create_autocmd("WinClosed", {
+        pattern = { tostring(conversation.response_window), tostring(conversation.source_window) },
+        once = true,
+        callback = function(event)
+            -- WinClosed runs before the window becomes invalid. Do not try
+            -- to close the same window again while handling its closure.
+            if tonumber(event.match) == conversation.response_window then
+                conversation.response_window = nil
+            else
+                conversation.source_window = nil
+            end
+            close_conversation_windows(conversation)
+        end,
+        desc = "Cancel SwiftPrompt when its response or source window closes",
+    })
     configure_response_display(conversation.response_buffer, conversation.response_window)
 
     vim.keymap.set("n", "f", function()
