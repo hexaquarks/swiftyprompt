@@ -77,6 +77,7 @@ describe("Claude connector", function()
         assert.matches("Question: Explain this", sent[1][2])
         assert.same({ { 41, "stdin" } }, closed)
         result("The answer")
+        assert.same({}, completions)
         jobs[1].callbacks.on_exit(41, 0)
         assert.same({ { response = "The answer", session_id = "claude-session" } }, completions)
     end)
@@ -149,10 +150,14 @@ describe("Claude connector", function()
         result("Done")
         jobs[1].callbacks.on_exit(41, 0)
         jobs[1].callbacks.on_exit(41, 0)
+        emit({ type = "stream_event", event = {
+            type = "content_block_delta", delta = { type = "text_delta", text = "Late" },
+        } })
         claude.cancel(request)
         claude.cancel(nil)
         assert.same(1, #completions)
         assert.same({}, stopped)
+        assert.same({}, updates)
     end)
 
     it("reports structured failures even when the process exits successfully", function()
@@ -185,13 +190,26 @@ describe("Claude connector", function()
         assert.same("Claude exited with code 2.", completions[1].failure)
     end)
 
-    it("rejects incomplete, empty, or malformed output", function()
-        ask()
-        jobs[1].callbacks.on_stdout(41, { "not JSON", "null", "" })
-        result("")
-        jobs[1].callbacks.on_exit(41, 0)
-        assert.same("Claude finished without an answer.", completions[1].failure)
-    end)
+    for _, output in ipairs({
+        { name = "empty output", lines = { "" } },
+        { name = "malformed JSON", lines = { "not JSON", "" } },
+        { name = "a non-object JSON value", lines = { "null", "" } },
+        { name = "an empty result", lines = {
+            vim.json.encode({ type = "result", subtype = "success", result = "" }), "",
+        } },
+        { name = "a stream without a final result", lines = {
+            vim.json.encode({ type = "stream_event", event = {
+                type = "content_block_delta", delta = { type = "text_delta", text = "Partial" },
+            } }), "",
+        } },
+    }) do
+        it("rejects " .. output.name, function()
+            ask()
+            jobs[1].callbacks.on_stdout(41, output.lines)
+            jobs[1].callbacks.on_exit(41, 0)
+            assert.same({ { failure = "Claude finished without an answer." } }, completions)
+        end)
+    end
 
     for _, startup_failure in ipairs({ "return", "throw" }) do
         it("reports startup failures when jobstart will " .. startup_failure, function()

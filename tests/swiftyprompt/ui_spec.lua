@@ -2,14 +2,24 @@ local ui = require("swiftyprompt.ui")
 
 describe("SwiftyPrompt panel chrome", function()
     local panel
+    local body_buffer
+    local original_schedule
+
+    before_each(function()
+        original_schedule = vim.schedule
+    end)
 
     after_each(function()
+        vim.schedule = original_schedule
         if panel then
             ui.detach(panel)
             for _, window in ipairs({ panel.body_window, panel.frame_window }) do
                 if vim.api.nvim_win_is_valid(window) then
                     vim.api.nvim_win_close(window, true)
                 end
+            end
+            if vim.api.nvim_buf_is_valid(body_buffer) then
+                vim.api.nvim_buf_delete(body_buffer, { force = true })
             end
             panel = nil
         end
@@ -27,6 +37,7 @@ describe("SwiftyPrompt panel chrome", function()
             question = question,
             model = model or "gpt-6-luna",
         })
+        body_buffer = vim.api.nvim_win_get_buf(panel.body_window)
         return panel
     end
 
@@ -132,13 +143,39 @@ describe("SwiftyPrompt panel chrome", function()
 
     it("keeps resizing guards from touching a dismissed card", function()
         open_panel("response", "Question")
+        local scheduled_callbacks = {}
+        vim.schedule = function(callback)
+            table.insert(scheduled_callbacks, callback)
+        end
         vim.api.nvim_exec_autocmds("CursorMoved", { buffer = vim.api.nvim_win_get_buf(panel.body_window) })
+        assert.same(1, #scheduled_callbacks)
         ui.detach(panel)
         vim.api.nvim_win_close(panel.body_window, true)
         vim.api.nvim_win_close(panel.frame_window, true)
         assert.has_no.errors(function()
-            vim.wait(20)
+            scheduled_callbacks[1]()
         end)
         assert.same({}, vim.api.nvim_get_autocmds({ id = panel.layout_autocmd }))
+    end)
+
+    it("restores changed widths when several layout events arrive together", function()
+        open_panel("response", "Question")
+        local scheduled_callbacks = {}
+        vim.schedule = function(callback)
+            table.insert(scheduled_callbacks, callback)
+        end
+        vim.api.nvim_win_set_width(panel.frame_window, 40)
+        vim.api.nvim_win_set_width(panel.body_window, 38)
+        local response_buffer = vim.api.nvim_win_get_buf(panel.body_window)
+        vim.api.nvim_exec_autocmds("CursorMoved", { buffer = response_buffer })
+        vim.api.nvim_exec_autocmds("CursorMoved", { buffer = response_buffer })
+
+        assert.same(1, #scheduled_callbacks)
+        scheduled_callbacks[1]()
+        assert.same(60, vim.api.nvim_win_get_width(panel.frame_window))
+        assert.same(58, vim.api.nvim_win_get_width(panel.body_window))
+        assert.same(7, vim.api.nvim_win_get_height(panel.frame_window))
+        assert.same(3, vim.api.nvim_win_get_height(panel.body_window))
+        assert.same("You · Question", chrome_at(0))
     end)
 end)

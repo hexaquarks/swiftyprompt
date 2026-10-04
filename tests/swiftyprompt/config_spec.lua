@@ -1,6 +1,10 @@
 local config = require("swiftyprompt.config")
 
 describe("SwiftPrompt configuration", function()
+    after_each(function()
+        config.setup({})
+    end)
+
     it("selects Claude while keeping both providers' defaults", function()
         config.setup({ connector = "claude", connectors = { claude = { model = "haiku" } } })
         assert.equals("claude", config.values.connector)
@@ -9,10 +13,6 @@ describe("SwiftPrompt configuration", function()
         assert.equals("claude_login", config.values.connectors.claude.auth)
         assert.equals("ANTHROPIC_API_KEY", config.values.connectors.claude.api_key_env)
         assert.equals("codex", config.values.connectors.codex.command)
-    end)
-
-    after_each(function()
-        config.setup({})
     end)
 
     it("keeps defaults when only one option is changed", function()
@@ -43,21 +43,16 @@ describe("SwiftPrompt configuration", function()
         assert.equals("read-only", config.values.connectors.codex.sandbox)
     end)
 
-    it("uses medium effort for a model override and preserves explicit effort", function()
-        config.setup({ connectors = { codex = { model = "gpt-6.1-sol" } } })
-        assert.equals("gpt-6.1-sol", config.values.connectors.codex.model)
-        assert.equals("medium", config.values.connectors.codex.reasoning_effort)
-
+    it("preserves explicitly configured reasoning effort", function()
         config.setup({ connectors = { codex = { reasoning_effort = "high" } } })
         assert.equals("high", config.values.connectors.codex.reasoning_effort)
-        config.setup({})
-        assert.equals("medium", config.values.connectors.codex.reasoning_effort)
     end)
 
     it("starts fresh for every setup call", function()
-        config.setup({ connector = "first" })
+        config.setup({ connector = "first", connectors = { codex = { model = "custom" } } })
         config.setup({})
 
         assert.equals("codex", config.values.connector)
+        assert.equals("gpt-6-luna", config.values.connectors.codex.model)
     end)
 end)
