@@ -3,7 +3,9 @@ local M = {}
 local config = require("swiftyprompt.config")
 local connectors = {
     codex = require("swiftyprompt.connectors.codex"),
+    claude = require("swiftyprompt.connectors.claude"),
 }
+local connector_labels = { codex = "Codex", claude = "Claude" }
 
 local ui = require("swiftyprompt.ui")
 local markdown = require("swiftyprompt.markdown")
@@ -49,10 +51,12 @@ local function close_conversation_windows(conversation)
     close_window_if_valid(conversation.response_frame_window)
 end
 
-function M.thinking_status_text(frame_index)
+function M.thinking_status_text(frame_index, connector_name)
     local frame_count = #THINKING_FRAMES
     local normalized_index = ((frame_index - 1) % frame_count) + 1
-    return THINKING_FRAMES[normalized_index] .. "  Codex is thinking"
+    connector_name = connector_name or config.values.connector
+    local label = connector_labels[connector_name] or connector_name
+    return THINKING_FRAMES[normalized_index] .. "  " .. label .. " is thinking"
 end
 
 function M.split_response_lines(response_text)
@@ -273,7 +277,7 @@ local function start_thinking_animation(conversation)
     stop_thinking_animation(conversation)
 
     local frame_index = 1
-    render_response(conversation, M.thinking_status_text(frame_index))
+    render_response(conversation, M.thinking_status_text(frame_index, conversation.connector_name))
 
     local thinking_timer = vim.uv.new_timer()
     conversation.thinking_timer = thinking_timer
@@ -284,7 +288,7 @@ local function start_thinking_animation(conversation)
             end
 
             frame_index = frame_index + 1
-            render_response(conversation, M.thinking_status_text(frame_index))
+            render_response(conversation, M.thinking_status_text(frame_index, conversation.connector_name))
         end)
     end)
 end
@@ -435,15 +439,25 @@ local function extract_visual_selection(visual_start, cursor_position, visual_mo
     return table.concat(selected_lines, "\n")
 end
 
-local function conversation_key(source_buffer, scope, selected_code)
-    return table.concat({ source_buffer, scope, selected_code }, "\0")
+local function conversation_key(source_buffer, scope, selected_code, connector_name, connector_options)
+    connector_options = connector_options or {}
+    -- Session IDs are private to a provider, executable, model, and project.
+    return table.concat({
+        connector_name,
+        connector_options.command or "",
+        connector_options.model or "",
+        vim.fn.getcwd(),
+        source_buffer,
+        scope,
+        selected_code,
+    }, "\0")
 end
 
 local function start_conversation(source_window, anchor_line, anchor_column, selected_code, scope, context_label, context_subject)
     local source_buffer = vim.api.nvim_win_get_buf(source_window)
     local connector_name = config.values.connector
     local connector_options = vim.deepcopy(config.values.connectors[connector_name])
-    local key = conversation_key(source_buffer, scope, selected_code)
+    local key = conversation_key(source_buffer, scope, selected_code, connector_name, connector_options)
     local conversation = {
         source_window = source_window,
         anchor_line = anchor_line,
