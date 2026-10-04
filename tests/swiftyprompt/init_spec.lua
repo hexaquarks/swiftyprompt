@@ -1,9 +1,13 @@
 local swiftyprompt = require("swiftyprompt")
 local codex = require("swiftyprompt.connectors.codex")
+local claude = require("swiftyprompt.connectors.claude")
+local config = require("swiftyprompt.config")
 
 describe("SwiftPrompt interaction UI", function()
     local original_ask
     local original_cancel
+    local original_claude_ask
+    local original_claude_cancel
     local original_open_win
     local original_prompt_setcallback
     local original_buf_request_sync
@@ -33,6 +37,8 @@ describe("SwiftPrompt interaction UI", function()
         codex_response = "first line\nsecond line\nthird line"
         original_ask = codex.ask
         original_cancel = codex.cancel
+        original_claude_ask = claude.ask
+        original_claude_cancel = claude.cancel
         original_open_win = vim.api.nvim_open_win
         original_prompt_setcallback = vim.fn.prompt_setcallback
         original_buf_request_sync = vim.lsp.buf_request_sync
@@ -84,6 +90,9 @@ describe("SwiftPrompt interaction UI", function()
     after_each(function()
         codex.ask = original_ask
         codex.cancel = original_cancel
+        claude.ask = original_claude_ask
+        claude.cancel = original_claude_cancel
+        config.setup({})
         vim.api.nvim_open_win = original_open_win
         vim.fn.prompt_setcallback = original_prompt_setcallback
         vim.lsp.buf_request_sync = original_buf_request_sync
@@ -467,6 +476,88 @@ describe("SwiftPrompt interaction UI", function()
         assert.same("◜  Codex is thinking", swiftyprompt.thinking_status_text(1))
         assert.same("◠  Codex is thinking", swiftyprompt.thinking_status_text(2))
         assert.same("◜  Codex is thinking", swiftyprompt.thinking_status_text(7))
+    end)
+
+    it("uses Claude status, model labels, streaming, and cancellation", function()
+        swiftyprompt.setup({ connector = "claude", connectors = { claude = { model = "haiku" } } })
+        local callbacks
+        local request = {}
+        local cancelled
+        claude.ask = function(options, question, selected_code, thread_id, request_callbacks)
+            assert.same("haiku", options.model)
+            assert.same("Explain this", question)
+            assert.same("one", selected_code)
+            assert.is_nil(thread_id)
+            callbacks = request_callbacks
+            return request
+        end
+        claude.cancel = function(value)
+            cancelled = value
+        end
+        open_selection({ "one" }, { 1, 1 }, { 1, 2 })
+        submit_latest_prompt("Explain this")
+        local response_buffer = vim.api.nvim_get_current_buf()
+        assert.same({ "◜  Claude is thinking" }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+        local frame_buffer = vim.api.nvim_win_get_buf(vim.api.nvim_win_get_config(0).win)
+        local marks = vim.api.nvim_buf_get_extmarks(frame_buffer,
+            vim.api.nvim_create_namespace("swiftyprompt.ui"), 0, -1, { details = true })
+        local footer = marks[#marks][4].virt_text
+        assert.same("haiku", footer[#footer][1])
+        callbacks.on_update("Claude answer")
+        assert.same({ "Claude answer" }, vim.api.nvim_buf_get_lines(response_buffer, 0, -1, false))
+        vim.fn.maparg("<Esc>", "n", false, true).callback()
+        assert.same(request, cancelled)
+        assert.is_true(pcall(callbacks.on_complete, "Late answer", nil, "claude-session"))
+        assert.same({}, codex_requests)
+    end)
+
+    it("keeps follow-ups on the provider and model that started the conversation", function()
+        swiftyprompt.setup({ connector = "claude", connectors = { claude = { model = "haiku" } } })
+        local sessions = {}
+        claude.ask = function(options, _, _, thread_id, callbacks)
+            assert.same("haiku", options.model)
+            table.insert(sessions, thread_id or "new")
+            callbacks.on_complete("Answer", nil, "claude-session")
+            return {}
+        end
+        open_selection({ "one" }, { 1, 1 }, { 1, 2 })
+        submit_latest_prompt("First")
+        swiftyprompt.setup({ connector = "codex" })
+        vim.api.nvim_feedkeys("f", "mtx", false)
+        submit_latest_prompt("Follow-up")
+        assert.same({ "new", "claude-session" }, sessions)
+        assert.same({}, codex_requests)
+    end)
+
+    it("isolates reopened sessions by provider and model", function()
+        local sessions = {}
+        claude.ask = function(options, _, _, thread_id, callbacks)
+            table.insert(sessions, { model = options.model, session = thread_id or "new" })
+            callbacks.on_complete("Answer", nil, "claude-" .. options.model)
+            return {}
+        end
+        local source_window = open_selection({ "one" }, { 1, 1 }, { 1, 2 })
+        submit_latest_prompt("Codex question")
+        vim.cmd("normal q")
+
+        local function reopen(connector, model)
+            swiftyprompt.setup({ connector = connector, connectors = { claude = { model = model } } })
+            vim.api.nvim_set_current_win(source_window)
+            vim.api.nvim_win_set_cursor(source_window, { 1, 2 })
+            swiftyprompt.ask_about_visual_selection()
+            submit_latest_prompt("Another question")
+            vim.cmd("normal q")
+        end
+        reopen("claude", "haiku")
+        reopen("claude", "sonnet")
+        reopen("claude", "haiku")
+        reopen("codex", "haiku")
+        assert.same({
+            { model = "haiku", session = "new" },
+            { model = "sonnet", session = "new" },
+            { model = "haiku", session = "claude-haiku" },
+        }, sessions)
+        assert.same("thread-1", codex_requests[2].thread_id)
     end)
 
     it("cancels an in-progress request when Escape closes the response window", function()

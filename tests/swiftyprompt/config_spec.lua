@@ -1,6 +1,16 @@
 local config = require("swiftyprompt.config")
 
 describe("SwiftPrompt configuration", function()
+    it("selects Claude while keeping both providers' defaults", function()
+        config.setup({ connector = "claude", connectors = { claude = { model = "haiku" } } })
+        assert.equals("claude", config.values.connector)
+        assert.equals("claude", config.values.connectors.claude.command)
+        assert.equals("haiku", config.values.connectors.claude.model)
+        assert.equals("claude_login", config.values.connectors.claude.auth)
+        assert.equals("ANTHROPIC_API_KEY", config.values.connectors.claude.api_key_env)
+        assert.equals("codex", config.values.connectors.codex.command)
+    end)
+
     after_each(function()
         config.setup({})
     end)

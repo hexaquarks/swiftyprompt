@@ -6,6 +6,12 @@ local default_options = {
     current_file_keymap = "<leader>af",
     current_symbol_keymap = "<leader>as",
     connectors = {
+        claude = {
+            command = "claude",
+            model = "sonnet",
+            auth = "claude_login",
+            api_key_env = "ANTHROPIC_API_KEY",
+        },
         codex = {
             command = "codex",
             model = "gpt-6-luna",

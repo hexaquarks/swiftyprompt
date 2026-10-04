@@ -9,8 +9,8 @@
   Swiftyprompt
 </h1>
 
-SwiftPrompt is a small inline UI for asking Codex about a Visual selection, the
-current file, or the current LSP symbol without leaving Neovim.
+SwiftPrompt is a small inline UI for asking Codex or Claude Code about a Visual
+selection, the current file, or the current LSP symbol without leaving Neovim.
 
 ## Install
 
@@ -25,20 +25,10 @@ With lazy.nvim:
 }
 ```
 
-SwiftPrompt uses the `codex` command and Codex login by default. To authenticate
-with an API key instead, set the key in your shell environment and configure the
-connector:
+## Supported adapters
 
-```lua
-require("swiftyprompt").setup({
-  connectors = {
-    codex = {
-      auth = "api_key",
-      api_key_env = "OPENAI_API_KEY",
-    },
-  },
-})
-```
+- Codex
+- Claude
 
 ## Usage
 
@@ -47,27 +37,19 @@ require("swiftyprompt").setup({
 - Press `<leader>as` to ask about the current LSP symbol.
 
 The prompt window opens beside the selected code. Press Enter to send. In a
-response window, press `f` to ask a follow-up or `q`/Escape to close it.
+response window, press `f` to ask a follow-up, `gY` to copy the complete response,
+or `q`/Escape to close it. Closing a pending response cancels its request.
 
 ## Configuration
 
-Configure SwiftPrompt in your own Neovim configuration. Do not edit or ignore
-the plugin's `lua/swiftyprompt/config.lua`; it is version-controlled source that
-provides shared defaults.
+Select an adapter with `setup()` and optionally override its model:
 
 ```lua
 require("swiftyprompt").setup({
-  selection_keymap = "<leader>aa",
-  current_file_keymap = "<leader>af",
-  current_symbol_keymap = "<leader>as",
+  connector = "claude",
   connectors = {
-    codex = {
-      command = "codex",
-      model = "gpt-6-luna",
-      reasoning_effort = "none",
-      sandbox = "read-only",
-      auth = "codex_login",
-      api_key_env = "OPENAI_API_KEY",
+    claude = {
+      model = "haiku",
     },
   },
 })

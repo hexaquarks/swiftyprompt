@@ -1,4 +1,5 @@
 local M = {}
+local prompt = require("swiftyprompt.connectors.prompt")
 
 local IDLE_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -96,23 +97,6 @@ local function send_request(method, params, on_response)
         method = method,
         params = params,
     }) .. "\n")
-end
-
-local function build_prompt(question, selected_code, is_new_thread)
-    if not is_new_thread then
-        return "Question: " .. question
-    end
-
-    local codex_prompt = table.concat({
-        "Answer this question about the selected code. Do not edit files.",
-        "",
-        "Selected code:",
-        "```",
-        selected_code,
-        "```",
-    }, "\n")
-
-    return codex_prompt .. "\n\nQuestion: " .. question
 end
 
 local function finish_turn(turn, completed_turn)
@@ -364,7 +348,7 @@ function M.ask(connector_options, question, selected_code, thread_id, callbacks)
     local request = {
         callbacks = callbacks,
         options = connector_options,
-        prompt = build_prompt(question, selected_code, thread_id == nil),
+        prompt = prompt.build(question, selected_code, thread_id == nil),
         response = "",
         thread_id = thread_id,
     }
