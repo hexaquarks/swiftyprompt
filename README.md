@@ -9,6 +9,13 @@
   Swiftyprompt
 </h1>
 
+<p align="center">
+  <a href="https://github.com/hexaquarks/swiftyprompt/actions/workflows/tests.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/hexaquarks/swiftyprompt/tests.yml?branch=main&amp;label=tests" /></a>
+  <a href="https://app.codecov.io/gh/hexaquarks/swiftyprompt"><img alt="Coverage" src="https://img.shields.io/codecov/c/github/hexaquarks/swiftyprompt/main" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/hexaquarks/swiftyprompt" /></a>
+  <a href=".github/workflows/tests.yml"><img alt="Tested Neovim version" src="https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhexaquarks%2Fswiftyprompt%2Fmain%2F.github%2Fworkflows%2Ftests.yml&amp;query=%24.jobs.test.env.NEOVIM_VERSION&amp;label=Neovim&amp;logo=neovim&amp;color=57A143" /></a>
+</p>
+
 SwiftPrompt is a small inline UI for asking Codex or Claude Code about a Visual
 selection, the current file, or the current LSP symbol without leaving Neovim.
 

@@ -1,2 +1,5 @@
 .luarc.json
 AGENTS.md
+.tests/
+luacov.stats.out
+coverage.xml
