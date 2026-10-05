@@ -380,6 +380,17 @@ local function open_question_prompt(conversation, row_offset)
             remap = false,
         })
     end
+    vim.keymap.set("i", "<S-CR>", function()
+        local cursor = vim.api.nvim_win_get_cursor(0)
+        local row, column = cursor[1] - 1, cursor[2]
+        -- Insert directly because native prompt-buffer newlines submit the input.
+        vim.api.nvim_buf_set_text(question_buffer, row, column, row, column, { "", "" })
+        vim.api.nvim_win_set_cursor(0, { cursor[1] + 1, 0 })
+    end, {
+        buffer = question_buffer,
+        nowait = true,
+        desc = "Insert a newline in the question",
+    })
 
     conversation.question_panel = ui.open(question_buffer,
         panel_options(conversation, "input", ui.input_height, row_offset))
@@ -406,6 +417,11 @@ local function open_question_prompt(conversation, row_offset)
     })
 
     vim.fn.prompt_setcallback(question_buffer, function(question)
+        -- Neovim adds a fresh prompt line before calling back with only the last input line.
+        local lines = vim.api.nvim_buf_get_lines(question_buffer, 0, -2, false)
+        if #lines > 0 then
+            question = table.concat(lines, "\n")
+        end
         close_question_panel(conversation)
 
         if question ~= "" then
