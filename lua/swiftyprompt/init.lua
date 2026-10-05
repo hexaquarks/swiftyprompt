@@ -367,7 +367,40 @@ local function open_question_prompt(conversation, row_offset)
     vim.bo[question_buffer].bufhidden = "wipe"
     -- Blink enables completion in scratch buffers unless explicitly disabled.
     vim.b[question_buffer].completion = false
+
+    local previous_cursor
+    local input_cursor
+    vim.api.nvim_create_autocmd({ "BufEnter", "InsertEnter" }, {
+        buffer = question_buffer,
+        callback = function()
+            if previous_cursor == nil then
+                previous_cursor = vim.o.guicursor
+            end
+            input_cursor = previous_cursor .. (previous_cursor == "" and "" or ",") .. "a:ver25"
+            vim.o.guicursor = input_cursor
+        end,
+        desc = "Show an insertion caret in the question editor",
+    })
+    vim.api.nvim_create_autocmd({ "BufLeave", "BufWipeout" }, {
+        buffer = question_buffer,
+        callback = function()
+            -- Cursor shape is global, so restore it when focus leaves the input.
+            if previous_cursor and vim.o.guicursor == input_cursor then
+                vim.o.guicursor = previous_cursor
+            end
+            previous_cursor = nil
+        end,
+        desc = "Restore the editor cursor after leaving the question",
+    })
+
     block_global_keymaps(question_buffer, { "n", "i" })
+    -- Native completion still works without Blink unless its shortcuts are blocked.
+    for _, completion_key in ipairs({ "<C-n>", "<C-p>", "<C-x>" }) do
+        vim.keymap.set("i", completion_key, "<Nop>", {
+            buffer = question_buffer,
+            nowait = true,
+        })
+    end
     for _, mode in ipairs({ "n", "i" }) do
         vim.keymap.set(mode, "<C-o>", "<Nop>", {
             buffer = question_buffer,
@@ -391,13 +424,11 @@ local function open_question_prompt(conversation, row_offset)
         vim.api.nvim_win_set_cursor(0, { cursor[1] + 1, 0 })
     end
 
-    for _, newline_key in ipairs({ "<C-j>", "<S-CR>" }) do
-        vim.keymap.set("i", newline_key, insert_newline, {
-            buffer = question_buffer,
-            nowait = true,
-            desc = "Insert a newline in the question",
-        })
-    end
+    vim.keymap.set("i", "<C-j>", insert_newline, {
+        buffer = question_buffer,
+        nowait = true,
+        desc = "Insert a newline in the question",
+    })
 
     conversation.question_panel = ui.open(question_buffer,
         panel_options(conversation, "input", ui.input_height, row_offset))
