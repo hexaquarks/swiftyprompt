@@ -360,12 +360,47 @@ local function open_question_prompt(conversation, row_offset)
     close_question_panel(conversation)
 
     local question_buffer = vim.api.nvim_create_buf(false, true)
-    vim.bo[question_buffer].buftype = "prompt"
+    -- A scratch buffer lets users edit every line of a multiline question.
+    vim.bo[question_buffer].buftype = "nofile"
     -- Prompt text must never survive after its floating window closes. Otherwise
     -- Neovim keeps a modified unnamed buffer and asks to save it on exit.
     vim.bo[question_buffer].bufhidden = "wipe"
-    vim.fn.prompt_setprompt(question_buffer, "")
+    -- Blink enables completion in scratch buffers unless explicitly disabled.
+    vim.b[question_buffer].completion = false
+
+    local previous_cursor
+    local input_cursor
+    vim.api.nvim_create_autocmd({ "BufEnter", "InsertEnter" }, {
+        buffer = question_buffer,
+        callback = function()
+            if previous_cursor == nil then
+                previous_cursor = vim.o.guicursor
+            end
+            input_cursor = previous_cursor .. (previous_cursor == "" and "" or ",") .. "a:ver25"
+            vim.o.guicursor = input_cursor
+        end,
+        desc = "Show an insertion caret in the question editor",
+    })
+    vim.api.nvim_create_autocmd({ "BufLeave", "BufWipeout" }, {
+        buffer = question_buffer,
+        callback = function()
+            -- Cursor shape is global, so restore it when focus leaves the input.
+            if previous_cursor and vim.o.guicursor == input_cursor then
+                vim.o.guicursor = previous_cursor
+            end
+            previous_cursor = nil
+        end,
+        desc = "Restore the editor cursor after leaving the question",
+    })
+
     block_global_keymaps(question_buffer, { "n", "i" })
+    -- Native completion still works without Blink unless its shortcuts are blocked.
+    for _, completion_key in ipairs({ "<C-n>", "<C-p>", "<C-x>" }) do
+        vim.keymap.set("i", completion_key, "<Nop>", {
+            buffer = question_buffer,
+            nowait = true,
+        })
+    end
     for _, mode in ipairs({ "n", "i" }) do
         vim.keymap.set(mode, "<C-o>", "<Nop>", {
             buffer = question_buffer,
@@ -373,13 +408,27 @@ local function open_question_prompt(conversation, row_offset)
             remap = false,
         })
     end
-    for _, input_key in ipairs({ "<BS>", "<C-h>", "<Del>", "<CR>" }) do
+    for _, input_key in ipairs({ "<BS>", "<C-h>", "<Del>" }) do
         vim.keymap.set("i", input_key, input_key, {
             buffer = question_buffer,
             nowait = true,
             remap = false,
         })
     end
+
+    local function insert_newline()
+        local cursor = vim.api.nvim_win_get_cursor(0)
+        local row, column = cursor[1] - 1, cursor[2]
+        -- Split at the cursor without applying the source buffer's indentation rules.
+        vim.api.nvim_buf_set_text(question_buffer, row, column, row, column, { "", "" })
+        vim.api.nvim_win_set_cursor(0, { cursor[1] + 1, 0 })
+    end
+
+    vim.keymap.set("i", "<C-j>", insert_newline, {
+        buffer = question_buffer,
+        nowait = true,
+        desc = "Insert a newline in the question",
+    })
 
     conversation.question_panel = ui.open(question_buffer,
         panel_options(conversation, "input", ui.input_height, row_offset))
@@ -405,13 +454,20 @@ local function open_question_prompt(conversation, row_offset)
         desc = "Dismiss SwiftyPrompt when its input or source window closes",
     })
 
-    vim.fn.prompt_setcallback(question_buffer, function(question)
+    vim.keymap.set("i", "<CR>", function()
+        local lines = vim.api.nvim_buf_get_lines(question_buffer, 0, -1, false)
+        local question = table.concat(lines, "\n")
+        vim.cmd("stopinsert")
         close_question_panel(conversation)
 
         if question ~= "" then
             submit_question(conversation, question)
         end
-    end)
+    end, {
+        buffer = question_buffer,
+        nowait = true,
+        desc = "Send the question",
+    })
 
     set_close_keymaps(question_buffer, conversation)
     vim.cmd("startinsert")

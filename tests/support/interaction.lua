@@ -26,7 +26,6 @@ function M.setup()
             claude_ask = claude.ask,
             claude_cancel = claude.cancel,
             open_win = vim.api.nvim_open_win,
-            prompt_setcallback = vim.fn.prompt_setcallback,
             buf_request_sync = vim.lsp.buf_request_sync,
             mode = vim.fn.mode,
             getpos = vim.fn.getpos,
@@ -42,7 +41,7 @@ function M.setup()
                 "<C-o>", "<C-d>", "<C-u>", "<F8>", "<F9>", "j", "<Plug>(SwiftPromptTestDown)",
                 "<leader>aa", "<leader>af", "<leader>as",
             },
-            i = { "<C-o>", "<CR>", "<BS>", "<Esc>" },
+            i = { "<C-o>", "<CR>", "<C-j>", "<S-CR>", "<BS>", "<Esc>" },
             x = { "<leader>aa" },
         }) do
             mappings[mode] = {}
@@ -52,11 +51,9 @@ function M.setup()
             end
         end
         editor.opened_window_configs = {}
-        editor.question_prompt_callbacks = {}
         editor.codex_requests = {}
         editor.notifications = {}
         editor.codex_response = "first line\nsecond line\nthird line"
-        editor.original_prompt_setcallback = originals.prompt_setcallback
 
         config.setup({})
         vim.api.nvim_open_win = function(buffer, enter, options)
@@ -64,9 +61,6 @@ function M.setup()
                 table.insert(editor.opened_window_configs, vim.deepcopy(options))
             end
             return originals.open_win(buffer, enter, options)
-        end
-        vim.fn.prompt_setcallback = function(buffer, callback)
-            editor.question_prompt_callbacks[buffer] = callback
         end
         vim.fn.mode = function()
             return "v"
@@ -118,7 +112,6 @@ function M.setup()
         claude.ask = originals.claude_ask
         claude.cancel = originals.claude_cancel
         vim.api.nvim_open_win = originals.open_win
-        vim.fn.prompt_setcallback = originals.prompt_setcallback
         vim.lsp.buf_request_sync = originals.buf_request_sync
         vim.fn.mode = originals.mode
         vim.fn.getpos = originals.getpos
@@ -165,9 +158,11 @@ function M.setup()
 
     function editor.submit_latest_prompt(question)
         local prompt_buffer = vim.api.nvim_get_current_buf()
-        local callback = editor.question_prompt_callbacks[prompt_buffer]
+        local callback = vim.fn.maparg("<CR>", "i", false, true).callback
         assert.is_function(callback, "The current buffer is not a question prompt")
-        callback(question)
+        vim.api.nvim_buf_set_lines(prompt_buffer, 0, -1, false,
+            vim.split(question, "\n", { plain = true }))
+        callback()
     end
 
     function editor.open_long_response()

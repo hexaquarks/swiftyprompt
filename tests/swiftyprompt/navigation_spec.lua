@@ -9,7 +9,6 @@ describe("SwiftPrompt navigation behavior", function()
         vim.keymap.set("i", "<C-o>", function()
             global_mapping_count = global_mapping_count + 1
         end)
-        vim.fn.prompt_setcallback = editor.original_prompt_setcallback
 
         editor.open_selection({ "one" }, { 1, 1 }, { 1, 0 })
 
@@ -33,17 +32,78 @@ describe("SwiftPrompt navigation behavior", function()
         vim.keymap.set("i", "<CR>", function()
             global_mapping_count = global_mapping_count + 1
         end)
-        vim.fn.prompt_setcallback = editor.original_prompt_setcallback
 
         editor.open_selection({ "one" }, { 1, 1 }, { 1, 0 })
 
         local enter_mapping = vim.fn.maparg("<CR>", "i", false, true)
         assert.same(1, enter_mapping.buffer)
-        assert.same("<CR>", enter_mapping.rhs)
+        assert.is_function(enter_mapping.callback)
 
         vim.api.nvim_feedkeys(vim.keycode("iExplain this<CR>"), "mtx", false)
         assert.same(0, global_mapping_count)
         assert.same("Explain this", editor.codex_requests[1].question)
+    end)
+
+    it("inserts Ctrl+J newlines and allows editing earlier lines before sending", function()
+        local global_mapping_count = 0
+        vim.keymap.set("i", "<C-j>", function()
+            global_mapping_count = global_mapping_count + 1
+        end)
+        editor.open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        local prompt_buffer = vim.api.nvim_get_current_buf()
+
+        vim.api.nvim_feedkeys(vim.keycode("iFirst line<C-j><C-j>Last line"), "mtx", false)
+
+        assert.same(0, global_mapping_count)
+        assert.same({}, editor.codex_requests)
+        assert.same(prompt_buffer, vim.api.nvim_get_current_buf())
+        assert.same({ "First line", "", "Last line" },
+            vim.api.nvim_buf_get_lines(prompt_buffer, 0, -1, false))
+
+        vim.api.nvim_feedkeys(vim.keycode("ggA edited<CR>"), "mtx", false)
+
+        assert.same(1, #editor.codex_requests)
+        assert.same("First line edited\n\nLast line", editor.codex_requests[1].question)
+    end)
+
+    it("splits a question at the cursor with Ctrl+J", function()
+        editor.open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        vim.api.nvim_feedkeys(vim.keycode("iHello world"), "mtx", false)
+        vim.api.nvim_win_set_cursor(0, { 1, 6 })
+
+        vim.api.nvim_feedkeys(vim.keycode("i<C-j>"), "mtx", false)
+
+        assert.same({}, editor.codex_requests)
+        assert.same({ "Hello ", "world" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+        vim.api.nvim_feedkeys(vim.keycode("i<CR>"), "mtx", false)
+        assert.same("Hello \nworld", editor.codex_requests[1].question)
+    end)
+
+    it("blocks native completion shortcuts in question input", function()
+        editor.open_selection({ "line_hl_group" }, { 1, 1 }, { 1, 0 })
+        for _, key in ipairs({ "<C-n>", "<C-p>", "<C-x>" }) do
+            local mapping = vim.fn.maparg(key, "i", false, true)
+            assert.same(1, mapping.buffer)
+            assert.same("<Nop>", mapping.rhs)
+        end
+
+        vim.api.nvim_feedkeys(vim.keycode("ile<C-n><C-p><C-x><C-j>next<CR>"), "mtx", false)
+        assert.same("le\nnext", editor.codex_requests[1].question)
+    end)
+
+    it("shows an insertion caret only while question input is focused", function()
+        local original_cursor = vim.o.guicursor
+        local source_window = editor.open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+        local input_window = vim.api.nvim_get_current_win()
+        assert.matches("a:ver25$", vim.o.guicursor)
+
+        vim.api.nvim_set_current_win(source_window)
+        assert.same(original_cursor, vim.o.guicursor)
+        vim.api.nvim_set_current_win(input_window)
+        assert.matches("a:ver25$", vim.o.guicursor)
+
+        editor.submit_latest_prompt("Explain this")
+        assert.same(original_cursor, vim.o.guicursor)
     end)
 
     it("preserves Backspace while editing a question prompt", function()
@@ -51,7 +111,6 @@ describe("SwiftPrompt navigation behavior", function()
         vim.keymap.set("i", "<BS>", function()
             global_mapping_count = global_mapping_count + 1
         end)
-        vim.fn.prompt_setcallback = editor.original_prompt_setcallback
 
         editor.open_selection({ "one" }, { 1, 1 }, { 1, 0 })
 

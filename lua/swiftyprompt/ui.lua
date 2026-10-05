@@ -103,6 +103,7 @@ local function footer_chunks(kind, model)
     if kind == "input" then
         controls = {
             { "Enter", "SwiftyPromptAccent" }, { " send · ", "SwiftyPromptMuted" },
+            { "Ctrl+J", "SwiftyPromptAccent" }, { " newline · ", "SwiftyPromptMuted" },
             { "Esc", "SwiftyPromptAccent" }, { " cancel", "SwiftyPromptMuted" },
         }
     else
