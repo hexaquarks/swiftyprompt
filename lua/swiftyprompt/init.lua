@@ -365,6 +365,8 @@ local function open_question_prompt(conversation, row_offset)
     -- Prompt text must never survive after its floating window closes. Otherwise
     -- Neovim keeps a modified unnamed buffer and asks to save it on exit.
     vim.bo[question_buffer].bufhidden = "wipe"
+    -- Blink enables completion in scratch buffers unless explicitly disabled.
+    vim.b[question_buffer].completion = false
     block_global_keymaps(question_buffer, { "n", "i" })
     for _, mode in ipairs({ "n", "i" }) do
         vim.keymap.set(mode, "<C-o>", "<Nop>", {
