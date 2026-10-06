@@ -32,6 +32,7 @@ local function define_highlights()
         Muted = { fg = colors.muted, bg = colors.background },
         Separator = { fg = colors.separator, bg = colors.background },
         Code = { bg = colors.code },
+        Source = { link = "Visual", default = true },
         CodeBorder = { fg = colors.separator, bg = colors.code },
         String = { fg = "#83ed9b" },
         Keyword = { fg = "#ed8bd2" },
@@ -48,6 +49,35 @@ vim.api.nvim_create_autocmd("ColorScheme", {
     callback = define_highlights,
     desc = "Restore SwiftyPrompt panel colors after a colorscheme change",
 })
+
+local source_namespace = vim.api.nvim_create_namespace("swiftyprompt.source")
+
+function M.highlight_source(buffer, ranges)
+    local highlights = {}
+    for _, range in ipairs(ranges) do
+        local options = { priority = 110 }
+        if range.linewise then
+            options.line_hl_group = "SwiftyPromptSource"
+        else
+            options.end_row = range.row
+            options.end_col = range.end_column
+            options.hl_group = "SwiftyPromptSource"
+        end
+        table.insert(highlights, vim.api.nvim_buf_set_extmark(buffer, source_namespace,
+            range.row, range.column or 0, options))
+    end
+    return highlights
+end
+
+function M.clear_source_highlight(buffer, highlights)
+    if not buffer or not vim.api.nvim_buf_is_valid(buffer) then
+        return
+    end
+    -- Delete only this conversation's marks; other conversations may share the buffer.
+    for _, highlight in ipairs(highlights or {}) do
+        vim.api.nvim_buf_del_extmark(buffer, source_namespace, highlight)
+    end
+end
 
 -- Work in display cells so CJK text and multibyte names fit the actual panel.
 function M.truncate(text, width, force_ellipsis)
