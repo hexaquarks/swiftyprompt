@@ -26,6 +26,7 @@ local function close_conversation_windows(conversation)
     end
     conversation.closed = true
     stop_thinking_animation(conversation)
+    ui.clear_source_highlight(conversation.source_buffer, conversation.source_highlights)
     ui.detach(conversation.question_panel)
     ui.detach(conversation.response_panel)
 
@@ -462,6 +463,8 @@ local function open_question_prompt(conversation, row_offset)
 
         if question ~= "" then
             submit_question(conversation, question)
+        else
+            close_conversation_windows(conversation)
         end
     end, {
         buffer = question_buffer,
@@ -509,13 +512,17 @@ local function conversation_key(source_buffer, scope, selected_code, connector_n
     }, "\0")
 end
 
-local function start_conversation(source_window, anchor_line, anchor_column, selected_code, scope, context_label, context_subject)
+local function start_conversation(
+    source_window, anchor_line, anchor_column, selected_code, scope, context_label, context_subject, highlight_ranges
+)
     local source_buffer = vim.api.nvim_win_get_buf(source_window)
     local connector_name = config.values.connector
     local connector_options = vim.deepcopy(config.values.connectors[connector_name])
     local key = conversation_key(source_buffer, scope, selected_code, connector_name, connector_options)
     local conversation = {
         source_window = source_window,
+        source_buffer = source_buffer,
+        source_highlights = ui.highlight_source(source_buffer, highlight_ranges or {}),
         anchor_line = anchor_line,
         anchor_column = anchor_column,
         selected_code = selected_code,
@@ -602,7 +609,25 @@ function M.ask_about_visual_selection()
         cursor_position[1],
         cursor_position[2],
     }, ":")
-    start_conversation(source_window, anchor_line, anchor_column, selected_code, selection_scope, "Selection", "selected code")
+    local highlight_ranges = {}
+    local cursor_region_position = { 0, cursor_position[1], cursor_position[2] + 1, 0 }
+    -- Use the same native region rules as extraction for reversed and block selections.
+    for _, segment in ipairs(vim.fn.getregionpos(visual_start, cursor_region_position, { type = visual_mode })) do
+        local first, last = segment[1], segment[2]
+        local line = vim.api.nvim_buf_get_lines(0, first[2] - 1, first[2], false)[1]
+        if visual_mode == "V" then
+            table.insert(highlight_ranges, { row = first[2] - 1, linewise = true })
+        elseif first[3] > 0 then
+            local last_character = vim.fn.strcharpart(line:sub(last[3]), 0, 1)
+            table.insert(highlight_ranges, {
+                row = first[2] - 1,
+                column = first[3] - 1,
+                end_column = last[3] - 1 + #last_character,
+            })
+        end
+    end
+    start_conversation(source_window, anchor_line, anchor_column, selected_code, selection_scope,
+        "Selection", "selected code", highlight_ranges)
 end
 
 local function find_innermost_symbol_at_line(document_symbols, cursor_line)
@@ -654,6 +679,11 @@ function M.ask_about_current_symbol()
                 symbol_range["end"].line + 1,
                 false
             )
+            local highlight_ranges = {}
+            -- Symbol context includes complete source lines, so highlight those same lines.
+            for row = symbol_range.start.line, symbol_range["end"].line do
+                table.insert(highlight_ranges, { row = row, linewise = true })
+            end
             start_conversation(
                 source_window,
                 cursor_position[1] - 1,
@@ -667,7 +697,8 @@ function M.ask_about_current_symbol()
                     symbol_range["end"].character,
                 }, ":"),
                 "Symbol",
-                symbol_display_name(selected_symbol)
+                symbol_display_name(selected_symbol),
+                highlight_ranges
             )
             return
         end
