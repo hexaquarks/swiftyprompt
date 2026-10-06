@@ -18,6 +18,14 @@
 SwiftPrompt is a small inline UI for asking Codex or Claude Code about a Visual
 selection, the current file, or the current LSP symbol without leaving Neovim.
 
+<p align="center">
+
+<img width="600" alt="swiftyprompt-auto-20261005-204819" src="https://github.com/user-attachments/assets/69a99168-59de-4996-b2cf-eaac58a30ecb" />
+
+</p>
+
+
+
 ## Install
 
 With lazy.nvim:
