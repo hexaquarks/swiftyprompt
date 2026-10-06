@@ -24,6 +24,8 @@ local function close_conversation_windows(conversation)
     if conversation.closed then
         return
     end
+    -- Closing an Insert-mode mapping's window does not leave Insert mode by itself.
+    vim.cmd("stopinsert")
     conversation.closed = true
     stop_thinking_animation(conversation)
     ui.clear_source_highlight(conversation.source_buffer, conversation.source_highlights)
