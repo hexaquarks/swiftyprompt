@@ -116,7 +116,15 @@ end
 local function block_global_keymaps(buffer_id, modes)
     for _, mode in ipairs(modes) do
         for _, keymap in ipairs(vim.api.nvim_get_keymap(mode)) do
-            vim.keymap.set(mode, keymap.lhs, "<Nop>", {
+            local replacement = "<Nop>"
+            local keys = vim.keycode(keymap.lhs)
+            -- Insert printable mappings literally so plugin shortcuts cannot swallow text.
+            -- strtrans leaves printable Unicode intact but escapes control and special keys.
+            if mode == "i" and vim.fn.strtrans(keys) == keys then
+                replacement = keymap.lhs
+            end
+
+            vim.keymap.set(mode, keymap.lhs, replacement, {
                 buffer = buffer_id,
                 nowait = true,
                 remap = false,
