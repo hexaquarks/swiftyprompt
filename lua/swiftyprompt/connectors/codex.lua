@@ -296,7 +296,8 @@ end
 
 local function start_server(connector_options)
     state.stderr = ""
-    state.job_id = vim.fn.jobstart({ connector_options.command, "app-server", "--stdio" }, {
+    -- jobstart can throw for a missing executable instead of returning a failure code.
+    local ok, job_id = pcall(vim.fn.jobstart, { connector_options.command, "app-server", "--stdio" }, {
         on_stdout = handle_stdout,
         on_stderr = function(_, data)
             state.stderr = state.stderr .. table.concat(data, "\n")
@@ -313,11 +314,12 @@ local function start_server(connector_options)
         end,
     })
 
-    if state.job_id <= 0 then
+    if not ok or job_id <= 0 then
         fail_pending("Could not start the Codex app server.")
         reset_state()
         return
     end
+    state.job_id = job_id
 
     send_request("initialize", {
         clientInfo = { name = "swiftyprompt", version = "0.1.0" },

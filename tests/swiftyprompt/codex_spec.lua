@@ -353,6 +353,34 @@ describe("Codex connector", function()
         assert.same("Answer", answer)
     end)
 
+    it("reports a missing executable once and allows retrying", function()
+        vim.fn.jobstart = original_jobstart
+        local missing_options = vim.tbl_extend("force", options, { command = vim.fn.tempname() })
+        local failures = {}
+        codex.ask(missing_options, "Why?", "code", nil, function(response, failure)
+            assert.is_nil(response)
+            table.insert(failures, failure)
+        end)
+        assert.same({ "Could not start the Codex app server." }, failures)
+        assert.same({}, sent_messages)
+
+        vim.fn.jobstart = function(_, job_callbacks)
+            callbacks = job_callbacks
+            return 43
+        end
+        local answer
+        codex.ask(options, "Retry", "code", nil, function(response)
+            answer = response
+        end)
+        respond(1, {})
+        respond(3, { thread = { id = "replacement-thread" } })
+        respond(4, { turn = { id = "replacement-turn" } })
+        complete_turn("replacement-turn", "completed")
+        callbacks.on_exit(43, 1)
+        assert.same("Answer", answer)
+        assert.same({ "Could not start the Codex app server." }, failures)
+    end)
+
     for _, stage in ipairs({ "thread", "resume", "turn" }) do
         for _, cancelled in ipairs({ false, true }) do
             it("handles " .. stage .. " errors" .. (cancelled and " after cancellation" or ""), function()
