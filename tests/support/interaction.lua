@@ -41,7 +41,10 @@ function M.setup()
                 "<C-o>", "<C-d>", "<C-u>", "<F8>", "<F9>", "j", "<Plug>(SwiftPromptTestDown)",
                 "<leader>aa", "<leader>af", "<leader>as",
             },
-            i = { "<C-o>", "<CR>", "<C-j>", "<S-CR>", "<BS>", "<Esc>" },
+            i = {
+                "<C-o>", "<CR>", "<C-j>", "<S-CR>", "<BS>", "<Esc>",
+                ".", ",", ";", "(", ")", "[", "]", "{", "}", "<lt>", ">", '"', "'", "<Space>", "é", "jj",
+            },
             x = { "<leader>aa" },
         }) do
             mappings[mode] = {}

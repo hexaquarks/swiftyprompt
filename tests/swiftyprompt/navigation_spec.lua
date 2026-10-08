@@ -4,6 +4,25 @@ local interaction = require("tests.support.interaction")
 describe("SwiftPrompt navigation behavior", function()
     local editor = interaction.setup()
 
+    it("inserts literal text instead of running global printable mappings", function()
+        local global_mapping_count = 0
+        for _, key in ipairs({
+            ".", ",", ";", "(", ")", "[", "]", "{", "}", "<lt>", ">", '"', "'", "<Space>", "é", "jj",
+        }) do
+            vim.keymap.set("i", key, function()
+                global_mapping_count = global_mapping_count + 1
+            end)
+        end
+
+        editor.open_selection({ "one" }, { 1, 1 }, { 1, 0 })
+
+        local question = [[Explain .,;()[]{}<>"' é jj]]
+        vim.api.nvim_feedkeys(vim.keycode("i" .. question .. "<CR>"), "mtx", false)
+
+        assert.same(0, global_mapping_count)
+        assert.same(question, editor.codex_requests[1].question)
+    end)
+
     it("blocks global Control-O mappings inside the question prompt", function()
         local global_mapping_count = 0
         vim.keymap.set("i", "<C-o>", function()
