@@ -18,3 +18,9 @@ nvim --headless --noplugin -u NONE \
 `tests/minimal_init.lua` adds only SwiftPrompt to Neovim's runtime path. That
 means tests cannot accidentally pass because of settings or plugins from your
 normal Neovim configuration.
+
+`swiftyprompt/reopen_spec.lua` covers reopening without another provider request,
+repeated reopening, focusing an existing response, preserving follow-up context,
+reopening after the source buffer is deleted, and retaining the completed answer
+after cancellation or failure. It also checks the message shown when no answer
+is available.
