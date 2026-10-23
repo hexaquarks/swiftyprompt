@@ -49,10 +49,16 @@ With lazy.nvim:
 - In Visual mode, press `<leader>aa` to ask about the selection.
 - Press `<leader>af` to ask about the current file.
 - Press `<leader>as` to ask about the current LSP symbol.
+- Press `<leader>ar` to reopen the latest completed response.
 
 The prompt window opens beside the selected code. Press Enter to send. In a
 response window, press `f` to ask a follow-up, `gY` to copy the complete response,
 or `q`/Escape to close it. Closing a pending response cancels its request.
+
+> [!NOTE]
+> The latest completed response stays available until Neovim exits. Reopening it
+> sends no new request and preserves the original context for follow-ups. Failed
+> or cancelled requests do not replace the saved answer.
 
 ## Configuration
 
@@ -68,6 +74,9 @@ require("swiftyprompt").setup({
   },
 })
 ```
+
+Set `reopen_keymap` in `setup()` to change the reopen shortcut, or set it to
+`false` to disable the mapping.
 
 ## Local development
 
