@@ -5,6 +5,7 @@ local default_options = {
     selection_keymap = "<leader>aa",
     current_file_keymap = "<leader>af",
     current_symbol_keymap = "<leader>as",
+    reopen_keymap = "<leader>ar",
     connectors = {
         claude = {
             command = "claude",

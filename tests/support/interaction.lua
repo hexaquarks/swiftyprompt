@@ -39,7 +39,7 @@ function M.setup()
         for mode, keys in pairs({
             n = {
                 "<C-o>", "<C-d>", "<C-u>", "<F8>", "<F9>", "j", "<Plug>(SwiftPromptTestDown)",
-                "<leader>aa", "<leader>af", "<leader>as",
+                "<leader>aa", "<leader>af", "<leader>as", "<leader>ar",
             },
             i = {
                 "<C-o>", "<CR>", "<C-j>", "<S-CR>", "<BS>", "<Esc>",

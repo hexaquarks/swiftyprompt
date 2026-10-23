@@ -10,6 +10,8 @@ local connector_labels = { codex = "Codex", claude = "Claude" }
 local ui = require("swiftyprompt.ui")
 local markdown = require("swiftyprompt.markdown")
 local thread_ids_by_conversation_key = {}
+local last_response
+local last_response_conversation
 local THINKING_FRAMES = { "◜", "◠", "◝", "◞", "◡", "◟" }
 local THINKING_FRAME_INTERVAL_MS = 120
 local stop_thinking_animation
@@ -304,6 +306,48 @@ local function start_thinking_animation(conversation)
     end)
 end
 
+local function remember_response(conversation, response)
+    -- Retain conversation data only; closed buffers, windows, and timers cannot be reused.
+    last_response = {
+        response_text = response,
+        question = conversation.question,
+        selected_code = conversation.selected_code,
+        key = conversation.key,
+        connector_name = conversation.connector_name,
+        connector_options = vim.deepcopy(conversation.connector_options),
+        thread_id = conversation.thread_id,
+        context_label = conversation.context_label,
+        context_subject = conversation.context_subject,
+        display_context = conversation.display_context,
+    }
+    last_response_conversation = conversation
+end
+
+function M.reopen_last_response()
+    if not last_response then
+        vim.notify("SwiftPrompt: no completed response to reopen", vim.log.levels.INFO)
+        return
+    end
+
+    if not last_response_conversation.closed and not response_is_detached(last_response_conversation) then
+        vim.api.nvim_set_current_win(last_response_conversation.response_window)
+        return
+    end
+
+    close_conversation_windows(last_response_conversation)
+
+    local conversation = vim.deepcopy(last_response)
+    local source_window = vim.api.nvim_get_current_win()
+    local cursor = vim.api.nvim_win_get_cursor(source_window)
+    conversation.source_window = source_window
+    conversation.source_buffer = vim.api.nvim_win_get_buf(source_window)
+    conversation.anchor_line = cursor[1] - 1
+    conversation.anchor_column = cursor[2]
+
+    last_response_conversation = conversation
+    render_response(conversation, conversation.response_text)
+end
+
 local function submit_question(conversation, question)
     conversation.question = question
     local connector_name = conversation.connector_name
@@ -345,6 +389,7 @@ local function submit_question(conversation, question)
 
                 conversation.thread_id = thread_id
                 thread_ids_by_conversation_key[conversation.key] = thread_id
+                remember_response(conversation, response)
                 render_response(conversation, response)
             end,
         }
@@ -719,6 +764,12 @@ end
 
 function M.setup(user_options)
     config.setup(user_options)
+
+    if config.values.reopen_keymap then
+        vim.keymap.set("n", config.values.reopen_keymap, M.reopen_last_response, {
+            desc = "Reopen last SwiftPrompt response",
+        })
+    end
 
     if config.values.selection_keymap then
         vim.keymap.set("n", config.values.selection_keymap, M.notify_selection_required, {
